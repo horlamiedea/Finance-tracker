@@ -3,6 +3,11 @@ import re
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from dateutil import parser as date_parser
+import os
+from openai import OpenAI
+import json
+
+client = OpenAI()
 
 class GmailService:
     def __init__(self, credentials_dict):
@@ -59,11 +64,11 @@ class GmailService:
             narration = narration_match.group(1).strip() if narration_match else 'N/A'
 
             return {
-                'user': user,
+                'user_id': user.id,  # <-- changed from user object to user id
                 'transaction_type': transaction_type,
                 'amount': float(amount_str),
                 'account_balance': account_balance,
-                'date': transaction_date,
+                'date': transaction_date.isoformat(),  # save as string if storing to JSONField
                 'narration': narration,
             }
         return None
@@ -71,3 +76,56 @@ class GmailService:
     def debug_print_email_snippet(self, email_text, max_length=500):
         snippet = email_text[:max_length].replace('\n', ' ').replace('\r', ' ')
         print(f"Email snippet (first {max_length} chars): {snippet}")
+
+
+    async def ai_parse_transaction_async(self, email_text):
+        prompt = f"""
+    You are an assistant that extracts banking transaction information from email text.
+
+    Given the email content below, extract the following details:
+
+    - transaction_type: "debit" or "credit" (or "none" if not a transaction)
+    - amount: numeric string (e.g., "5480.00")
+    - date: transaction date and time in ISO 8601 format (YYYY-MM-DDTHH:MM:SS)
+    - narration: short description of the transaction
+    - account_balance: numeric string if available, else null
+
+    If the email does not contain a transaction, return {{"transaction_type": "none"}}.
+
+    Return ONLY a valid JSON object without any extra text, comments, or explanations.
+    The JSON must be parsable by standard JSON parsers.
+
+    Email content:
+    \"\"\"
+    {email_text}
+    \"\"\"
+    """
+        # Run synchronous OpenAI call in executor
+        import asyncio
+        from functools import partial
+
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None,
+            partial(
+                client.chat.completions.create,
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=256,
+                temperature=0
+            )
+        )
+        
+        # DEBUG: print raw content received
+        raw_content = response.choices[0].message.content
+        print("Raw OpenAI response content:")
+        print(raw_content)
+
+        import json
+        try:
+            parsed_json = json.loads(raw_content)
+            return parsed_json
+        except json.JSONDecodeError as e:
+            print(f"JSON decode error: {e}")
+            # You can return a default fallback to avoid crashing
+            return {"transaction_type": "none"}
