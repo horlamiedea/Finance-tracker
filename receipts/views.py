@@ -9,53 +9,107 @@ from transactions.services.ocr_service import OCRService
 from transactions.services.ai_service import AIService
 import os, re
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+from .tasks import process_receipt_upload
+
+# class ReceiptProcessView(generics.CreateAPIView):
+#     serializer_class   = ReceiptSerializer
+#     parser_classes     = [MultiPartParser]
+#     permission_classes = [permissions.IsAuthenticated]
+
+#     def create(self, request, *args, **kwargs):
+#         # 1) Save the empty receipt record
+#         serializer = self.get_serializer(data=request.data)
+#         serializer.is_valid(raise_exception=True)
+#         receipt = serializer.save(user=request.user)
+
+#         # 2) Send image to GPT-4 Vision & get parsed_data
+#         ai = AIService(api_key=os.getenv("OPENAI_API_KEY"))
+#         try:
+#             parsed = ai.categorize_expenses_from_image(receipt.uploaded_image.path)
+#         except ValueError as e:
+#             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+#         # 3) Persist line-items (always trust the API data)
+#         receipt.extracted_text = None
+#         receipt.items          = parsed["items"]
+#         receipt.save()
+
+#         # 4) Build matching queryset
+#         user        = request.user
+#         total       = parsed.get("total")
+#         tx_type     = "debit"  # or derive from parsed if you also extract it
+#         qs          = Transaction.objects.filter(
+#             user=user,
+#             amount=total,
+#             transaction_type=tx_type
+#         )
+
+#         # 5) Parse the receipt’s date (fallback to upload_date)
+#         raw_date = parsed.get("date", "")
+#         try:
+#             receipt_dt = datetime.fromisoformat(raw_date)
+#         except Exception:
+#             receipt_dt = receipt.upload_date
+
+#         matched = None
+
+#         # 6a) Exact calendar-day match
+#         same_day = qs.filter(date__date=receipt_dt.date())
+#         if same_day.exists():
+#             matched = same_day.first()
+#         else:
+#             # 6b) Expand to ±1 day
+#             start = receipt_dt - timedelta(days=1)
+#             end   = receipt_dt + timedelta(days=1)
+#             window = qs.filter(date__range=(start, end))
+#             if window.exists():
+#                 # pick the one whose timestamp is closest to receipt_dt
+#                 matched = min(
+#                     window,
+#                     key=lambda tx: abs(tx.date - receipt_dt)
+#                 )
+#             else:
+#                 # 6c) Fallback: pick the most recent with that amount
+#                 matched = qs.order_by("-date").first()
+
+#         # 7) Link it (if any) and save
+#         if matched:
+#             receipt.transaction = matched
+#             receipt.save()
+
+#         # 8) Return full payload
+#         return Response({
+#             "receipt": ReceiptSerializer(receipt).data,
+#             "parsed_data": parsed,
+#             "matched_transaction_id": matched.id if matched else None
+#         }, status=status.HTTP_201_CREATED)
+
+
 
 class ReceiptProcessView(generics.CreateAPIView):
+    """
+    POST /api/receipts/upload/
+    — Accepts an image file, creates a Receipt record, and enqueues
+      background processing to extract line-items & link to a Transaction.
+    """
     serializer_class   = ReceiptSerializer
-    parser_classes     = [MultiPartParser]
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes     = [MultiPartParser]
 
     def create(self, request, *args, **kwargs):
-        # 1) Save the empty receipt record
+        # 1) Validate and save the Receipt (without blocking for OCR/AI)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         receipt = serializer.save(user=request.user)
 
-        # 2) Send image directly to GPT-4 Vision
-        ai = AIService(api_key=os.getenv("OPENAI_API_KEY"))
-        try:
-            parsed = ai.categorize_expenses_from_image(receipt.uploaded_image.path)
-        except ValueError as e:
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # 2) Enqueue the background task
+        process_receipt_upload.delay(receipt.id)
 
-        # 3) Persist the API results
-        receipt.extracted_text = None     # no OCR string, since we used vision directly
-        receipt.items          = parsed["items"]
-        receipt.save()
-
-        # 4) Try to match an existing transaction
-        matched = None
-        try:
-            tx_date = datetime.strptime(parsed["date"], "%Y-%m-%d").date()
-            matched = Transaction.objects.filter(
-                user=request.user,
-                amount=parsed["total"],
-                date__date=tx_date,
-                transaction_type="debit"
-            ).first()
-            if matched:
-                receipt.transaction = matched
-                receipt.save()
-        except Exception:
-            matched = None
-
-        # 5) Return everything in one JSON payload
-        return Response({
-            "receipt": ReceiptSerializer(receipt).data,
-            "parsed_data": parsed,
-            "matched_transaction_id": matched.id if matched else None
-        }, status=status.HTTP_201_CREATED)
+        # 3) Return the Receipt immediately, with a notice
+        data = {
+            "receipt": ReceiptSerializer(receipt, context={"request": request}).data,
+            "message": "Receipt uploaded successfully. Line-items will be extracted in the background."
+        }
+        headers = self.get_success_headers(serializer.data)
+        return Response(data, status=status.HTTP_201_CREATED, headers=headers)

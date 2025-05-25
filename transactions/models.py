@@ -16,6 +16,8 @@ class Transaction(models.Model):
     sender_receiver = models.CharField(max_length=255, null=True, blank=True)
     reference_id = models.CharField(max_length=255, null=True, blank=True)
 
+    receipt_items     = models.JSONField(null=True, blank=True)
+
     class Meta:
         unique_together = ('user', 'amount', 'date', 'transaction_type')
 
@@ -37,6 +39,9 @@ class RawEmail(models.Model):
         default='none'
     )
     transaction_data = models.JSONField(null=True, blank=True)
+
+
+
 
     def __str__(self):
         return f"RawEmail {self.email_id} for {self.user}"

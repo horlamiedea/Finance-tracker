@@ -156,6 +156,11 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'transactions.tasks.sync_transactions_task',
         'schedule': 3600,  # Every hour
     },
+
+    'reconcile_new_receipts': {
+        'task': 'receipts.tasks.reconcile_unprocessed_receipts',
+        'schedule': 3600,
+    },
 }
 
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')

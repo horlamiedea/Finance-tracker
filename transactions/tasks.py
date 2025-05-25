@@ -122,7 +122,8 @@ def sync_user_transactions_task(user_id, start_date, end_date):
 
     gmail_service = GmailService(credentials_dict)
 
-    query = f'after:{start_date.split("T")[0]} before:{end_date.split("T")[0]} (Debit OR Credit)'
+    last_sync_date = start_date.split("T")[0] 
+    query = f'after:{last_sync_date} (Debit OR Credit)'
     emails = gmail_service.fetch_emails(query=query)
 
     # Wrap ORM calls in sync_to_async for async context
