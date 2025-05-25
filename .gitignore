@@ -14,3 +14,11 @@ DS_Store
 *.zip
 *.tar.gz
 *.tar.bz2
+*.IMG
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.mp4
+*.avi
+*.mkv
