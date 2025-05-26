@@ -27,12 +27,9 @@ class AIService:
             ValueError if the model response can’t be parsed into JSON.
         """
 
-        # 1) Load and base64-encode the image
         with open(image_path, "rb") as f:
             img_bytes = f.read()
         b64 = base64.b64encode(img_bytes).decode()
-
-        # 2) Build our prompt
         system_msg = {
             "role": "system",
             "content": (
@@ -50,13 +47,12 @@ class AIService:
 
         instruction_msg = {
             "role": "user",
-            # a brief instruction before the image
             "content": "Please extract the date, total, and line items from this receipt image:"
         }
 
         image_msg = {
             "role": "user",
-            # embed the image as a data URL
+
             "content": [
                 {
                     "type": "image_url",
@@ -68,17 +64,14 @@ class AIService:
             ]
         }
 
-        # 3) Call the chat API with vision
         resp = self.client.chat.completions.create(
-            model="gpt-4o-mini",        # or whichever GPT-4 vision model you have access to
+            model="gpt-4o-mini",       
             messages=[system_msg, instruction_msg, image_msg],
             temperature=0.0,
             max_tokens=300
         )
 
         raw = resp.choices[0].message.content
-
-        # 4) Strip any markdown fences and parse JSON
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
         try:
             data = json.loads(cleaned)

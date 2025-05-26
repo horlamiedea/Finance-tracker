@@ -31,7 +31,6 @@ class GmailService:
         parts = payload.get('parts', [])
         data = None
         if parts:
-            # sometimes message body is nested in parts
             for part in parts:
                 if part.get('body') and part['body'].get('data'):
                     data = part['body']['data']
@@ -41,7 +40,6 @@ class GmailService:
 
         if not data:
             return ''
-
         email_text = base64.urlsafe_b64decode(data).decode(errors='ignore')
         return email_text
 
@@ -51,24 +49,22 @@ class GmailService:
         balance_match = re.search(r'Account Balance:\s*N\s*([\d,]+\.\d{2})', email_text, re.IGNORECASE)
         date_match = re.search(r'Date & Time:\s*([\d]{1,2} [A-Za-z]+, [\d]{4} \| [\d:]+ [AP]M)', email_text, re.IGNORECASE)
         narration_match = re.search(r'Narration:\s*(.+)', email_text, re.IGNORECASE)
-
         if amount_match and date_match:
             transaction_type = amount_match.group(1).lower()
             amount_str = amount_match.group(2).replace(',', '')
             account_balance = float(balance_match.group(1).replace(',', '')) if balance_match else None
 
-            # Fix date parsing by removing the pipe '|'
             raw_date = date_match.group(1).replace('|', ' ')
             transaction_date = date_parser.parse(raw_date)
 
             narration = narration_match.group(1).strip() if narration_match else 'N/A'
 
             return {
-                'user_id': user.id,  # <-- changed from user object to user id
+                'user_id': user.id, 
                 'transaction_type': transaction_type,
                 'amount': float(amount_str),
                 'account_balance': account_balance,
-                'date': transaction_date.isoformat(),  # save as string if storing to JSONField
+                'date': transaction_date.isoformat(), 
                 'narration': narration,
             }
         return None
@@ -100,7 +96,6 @@ class GmailService:
     {email_text}
     \"\"\"
     """
-        # Run synchronous OpenAI call in executor
         import asyncio
         from functools import partial
 
@@ -116,7 +111,6 @@ class GmailService:
             )
         )
         
-        # DEBUG: print raw content received
         raw_content = response.choices[0].message.content
         print("Raw OpenAI response content:")
         print(raw_content)
@@ -127,5 +121,4 @@ class GmailService:
             return parsed_json
         except json.JSONDecodeError as e:
             print(f"JSON decode error: {e}")
-            # You can return a default fallback to avoid crashing
             return {"transaction_type": "none"}

@@ -102,11 +102,7 @@ class ReceiptProcessView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         receipt = serializer.save(user=request.user)
-
-        # 2) Enqueue the background task
         process_receipt_upload.delay(receipt.id)
-
-        # 3) Return the Receipt immediately, with a notice
         data = {
             "receipt": ReceiptSerializer(receipt, context={"request": request}).data,
             "message": "Receipt uploaded successfully. Line-items will be extracted in the background."

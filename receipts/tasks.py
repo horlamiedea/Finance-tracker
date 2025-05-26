@@ -22,19 +22,13 @@ def process_receipt_upload(receipt_id: int):
         receipt = Receipt.objects.get(id=receipt_id)
     except Receipt.DoesNotExist:
         return f"Receipt {receipt_id} no longer exists."
-
-    # 0) bail out if already linked
     if receipt.transaction_id:
         return f"Receipt {receipt_id} already attached to Tx {receipt.transaction_id}; skipping."
-
-    # 1) parse image
     ai = AIService(api_key=os.getenv("OPENAI_API_KEY"))
     try:
         parsed = ai.categorize_expenses_from_image(receipt.uploaded_image.path)
     except Exception as e:
         return f"AI parse failed for receipt {receipt_id}: {e}"
-
-    # 2) store parsed JSON on the receipt
     receipt.extracted_text = json.dumps(parsed)
     receipt.items          = parsed.get("items", [])
     receipt.save()
