@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 # Register your models here.
-from .models import Transaction, RawEmail
+from .models import *
 
 
 admin.site.register(Transaction)
@@ -27,3 +27,37 @@ class RawEmailAdmin(admin.ModelAdmin):
     )
     add_fieldsets = fieldsets
     readonly_fields = ('fetched_at',)
+
+
+admin.site.register(TransactionCategory)
+class TransactionCategoryAdmin(admin.ModelAdmin):
+    """Admin interface for TransactionCategory model."""
+    search_fields = ('name',)
+    ordering = ('name',)
+    fieldsets = (
+        (None, {'fields': ('name',)}),
+    )
+    add_fieldsets = fieldsets
+    list_display = ('name',)
+admin.site.register(UserCategoryMapping)
+class UserCategoryMappingAdmin(admin.ModelAdmin):
+    """Admin interface for UserCategoryMapping model."""
+    search_fields = ('user__username', 'transaction_category__name')
+    ordering = ('user', 'transaction_category')
+    fieldsets = (
+        (None, {'fields': ('user', 'transaction_category')}),
+        ('Keywords', {'fields': ('keywords',)}),
+    )
+    add_fieldsets = fieldsets
+    list_display = ('user', 'transaction_category')
+
+admin.site.register(UserTransactionCategorizationState)
+class UserTransactionCategorizationStateAdmin(admin.ModelAdmin):
+    """Admin interface for UserTransactionCategorizationState model."""
+    search_fields = ('user__username',)
+    ordering = ('user',)
+    fieldsets = (
+        (None, {'fields': ('user', 'state')}),
+    )
+    add_fieldsets = fieldsets
+    list_display = ('user', 'state')

@@ -131,34 +131,26 @@ class AIService:
         try:
             cleaned = invalid_json.strip()
             if not cleaned:
-                return '{"date": "", "total": 0, "items": []}'  # Fallback for empty response
-
-            # Ensure JSON starts and ends properly
+                return '{"date": "", "total": 0, "items": []}'
             if not cleaned.startswith("{"):
                 cleaned = "{" + cleaned
             if not cleaned.endswith("}"):
-                # Find the last valid item in the items array
                 items_end = cleaned.rfind("}")
                 if items_end != -1:
-                    # Check if last item is incomplete
                     last_comma = cleaned.rfind(",", 0, items_end)
                     last_brace = cleaned.rfind("{", 0, items_end)
                     if last_brace != -1 and last_brace > last_comma:
-                        # Truncate incomplete item
                         cleaned = cleaned[:last_brace].rstrip(", \n\t") + "]"
                     else:
                         cleaned = cleaned[:items_end + 1].rstrip(", \n\t") + "]"
                 else:
                     cleaned = cleaned.rstrip(", \n\t{") + "]}"
 
-                # Ensure the outer object is closed
                 if not cleaned.endswith("}"):
                     cleaned += "}"
 
-            # Remove trailing commas before closing brackets
             cleaned = re.sub(r",\s*(\]|\})", r"\1", cleaned)
 
-            # Validate the repaired JSON
             try:
                 json.loads(cleaned)
                 return cleaned

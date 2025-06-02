@@ -3,15 +3,17 @@ from asgiref.sync import sync_to_async
 from celery import shared_task
 from django.contrib.auth import get_user_model
 from .services.gmail_service import GmailService
-from transactions.models import Transaction, RawEmail
+from transactions.models import *
 from datetime import datetime
 from google.auth.exceptions import RefreshError
 import os, re
+from openai import OpenAI
 from dateutil import parser as date_parser
 import logging
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
+client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 @shared_task
 def sync_transactions_task():
@@ -196,3 +198,102 @@ def sync_user_transactions_task(user_id, start_date, end_date):
     loop.run_until_complete(asyncio.gather(*tasks))
 
     return f"Transactions synced successfully for user {user_id}. Parsed: {len(emails)}, Processed: {len(tasks)}"
+
+
+
+
+@shared_task
+def categorize_transactions_for_all_users():
+    users = User.objects.all()
+    for user in users:
+        categorize_transactions_for_user.delay(user.id)
+
+
+@shared_task
+def categorize_transactions_for_user(user_id):
+    user = User.objects.get(id=user_id)
+    # state, created = UserTransactionCategorizationState.objects.get_or_create(user=user)
+    # last_processed = state.last_processed_date or '1970-01-01T00:00:00Z'
+
+    transactions = Transaction.objects.filter(
+        user=user,
+        # date__gt=last_processed,
+        # category__isnull=True
+    ).order_by('date')
+
+    # if not transactions.exists():
+    #     logger.info(f"No new transactions to categorize for user {user.username}")
+    #     return "No new transactions to categorize."
+
+    # Fetch all categories from DB
+    categories = list(TransactionCategory.objects.values_list('name', flat=True))
+
+    # User keyword mappings
+    user_mappings = UserCategoryMapping.objects.filter(user=user)
+    user_keyword_map = {}
+    for mapping in user_mappings:
+        for keyword in mapping.keywords:
+            user_keyword_map[keyword.lower()] = mapping.transaction_category.name
+
+    for tx in transactions:
+        narration_lower = tx.narration.lower()
+        matched_category = None
+
+        # First, check user-defined keywords
+        for keyword, cat_name in user_keyword_map.items():
+            if keyword in narration_lower:
+                matched_category = TransactionCategory.objects.get(name=cat_name)
+                break
+
+        # Next, if no match, try AI categorization
+        if not matched_category:
+            prompt = f"""
+You are a helpful assistant that categorizes financial transactions into one of these categories:
+{', '.join(categories)}.
+
+Transaction narration: "{tx.narration}"
+Receipt items: {tx.receipt_items or []}
+
+Pick the best category from the list above or respond with "Unknown" if unsure.
+Respond ONLY with the category name.
+"""
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=10,
+                    temperature=0.2,
+                )
+                category_name = response.choices[0].message.content.strip()
+                if category_name not in categories:
+                    category_name = "Unknown"
+                matched_category, _ = TransactionCategory.objects.get_or_create(name=category_name)
+            except Exception as e:
+                logger.error(f"OpenAI API error for user {user.username} transaction {tx.id}: {e}")
+                matched_category, _ = TransactionCategory.objects.get_or_create(name="Unknown")
+
+        tx.category = matched_category
+        tx.save()
+
+        # Update purchase frequency for each item in receipt_items
+        items = tx.receipt_items or []
+        for item in items:
+            description = item.get("description", "").lower()
+            if not description:
+                continue
+            freq_obj, created = ItemPurchaseFrequency.objects.get_or_create(
+                user=user,
+                item_description=description,
+                defaults={"category": matched_category, "purchase_count": 0, "last_purchased": tx.date}
+            )
+            freq_obj.purchase_count += 1
+            freq_obj.last_purchased = max(freq_obj.last_purchased, tx.date) if freq_obj.last_purchased else tx.date
+            freq_obj.save()
+
+    # Update last processed date safely
+    last_transaction = transactions.last()
+    if last_transaction:
+        state.last_processed_date = last_transaction.date
+        state.save()
+
+    return f"Categorized {transactions.count()} transactions for user {user.username}."
