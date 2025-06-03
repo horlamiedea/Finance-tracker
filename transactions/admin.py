@@ -61,3 +61,15 @@ class UserTransactionCategorizationStateAdmin(admin.ModelAdmin):
     )
     add_fieldsets = fieldsets
     list_display = ('user', 'state')
+
+
+admin.site.register(ItemPurchaseFrequency)
+class ItemPurchaseFrequencyAdmin(admin.ModelAdmin):
+    """Admin interface for ItemPurchaseFrequency model."""
+    search_fields = ('user__username', 'item_name')
+    ordering = ('user', 'item_name')
+    fieldsets = (
+        (None, {'fields': ('user', 'item_name', 'frequency')}),
+    )
+    add_fieldsets = fieldsets
+    list_display = ('user', 'item_name', 'frequency')

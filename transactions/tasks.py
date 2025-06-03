@@ -212,18 +212,18 @@ def categorize_transactions_for_all_users():
 @shared_task
 def categorize_transactions_for_user(user_id):
     user = User.objects.get(id=user_id)
-    # state, created = UserTransactionCategorizationState.objects.get_or_create(user=user)
-    # last_processed = state.last_processed_date or '1970-01-01T00:00:00Z'
+    state, created = UserTransactionCategorizationState.objects.get_or_create(user=user)
+    last_processed = state.last_processed_date or '1970-01-01T00:00:00Z'
 
     transactions = Transaction.objects.filter(
         user=user,
-        # date__gt=last_processed,
-        # category__isnull=True
+        date__gt=last_processed,
+        category__isnull=True
     ).order_by('date')
 
-    # if not transactions.exists():
-    #     logger.info(f"No new transactions to categorize for user {user.username}")
-    #     return "No new transactions to categorize."
+    if not transactions.exists():
+        logger.info(f"No new transactions to categorize for user {user.username}")
+        return "No new transactions to categorize."
 
     # Fetch all categories from DB
     categories = list(TransactionCategory.objects.values_list('name', flat=True))
@@ -271,6 +271,20 @@ Respond ONLY with the category name.
             except Exception as e:
                 logger.error(f"OpenAI API error for user {user.username} transaction {tx.id}: {e}")
                 matched_category, _ = TransactionCategory.objects.get_or_create(name="Unknown")
+                category_name = response.choices[0].message.content.strip()
+
+                if category_name == "Unknown" or category_name not in categories:
+                    similar_tx = Transaction.objects.filter(
+                        user=user,
+                        narration__icontains=tx.narration[:30],
+                    ).exclude(category__isnull=True).first()
+
+                    if similar_tx and similar_tx.category:
+                        matched_category = similar_tx.category
+                    else:
+                        matched_category, _ = TransactionCategory.objects.get_or_create(name="Unknown")
+                else:
+                    matched_category, _ = TransactionCategory.objects.get_or_create(name=category_name)
 
         tx.category = matched_category
         tx.save()
