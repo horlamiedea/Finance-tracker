@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     'rest_framework',
     'rest_framework.authtoken',
+    'corsheaders',
     'users',
     'transactions',
     'receipts',
@@ -51,6 +52,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    'corsheaders.middleware.CorsMiddleware',
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -165,6 +167,13 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': 3600,
     },
 }
+
+
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",  # The origin for your React development server
+    "http://127.0.0.1:5173",
+]
 
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
