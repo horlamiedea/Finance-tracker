@@ -4,6 +4,7 @@ from celery import shared_task
 from django.contrib.auth import get_user_model
 from .services.gmail_service import GmailService
 from transactions.models import *
+from decimal import Decimal
 from datetime import datetime
 from google.auth.exceptions import RefreshError
 import os, re
@@ -105,13 +106,37 @@ def parse_transaction(self, email_text, user):
         return None
 
 
+@sync_to_async
+def create_transaction_if_not_exists(transaction_data):
+    """Create transaction with proper field types."""
+    try:
+        logger.info(f"Attempting to create transaction: {transaction_data}")
+        transaction, created = Transaction.objects.get_or_create(
+            user=transaction_data['user'],
+            amount=Decimal(transaction_data['amount']),
+            date=transaction_data['date'],
+            transaction_type=transaction_data['transaction_type'],
+            defaults={
+                'narration': transaction_data.get('narration', 'N/A'),
+                'account_balance': Decimal(transaction_data['account_balance']) if transaction_data.get('account_balance') else None,
+                'bank_name': transaction_data['bank_name'],
+            }
+        )
+        if created:
+            logger.info(f"Transaction created: {transaction}")
+        else:
+            logger.info(f"Transaction already exists: {transaction}")
+        return transaction, created
+    except Exception as e:
+        logger.error(f"Error creating transaction: {str(e)}")
+        return None, False
+
 @shared_task
 def sync_user_transactions_task(user_id, start_date, end_date):
     user = User.objects.get(id=user_id)
-
-    # Check OAuth credentials
     if not (user.gmail_token and user.gmail_refresh_token and
             os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET")):
+        logger.error(f"Missing Gmail OAuth credentials for user {user_id}")
         return f"Missing Gmail OAuth credentials for user {user_id}"
 
     credentials_dict = {
@@ -123,12 +148,10 @@ def sync_user_transactions_task(user_id, start_date, end_date):
     }
 
     gmail_service = GmailService(credentials_dict)
-
-    last_sync_date = start_date.split("T")[0] 
+    last_sync_date = start_date.split("T")[0]
     query = f'after:{last_sync_date} (Debit OR Credit)'
     emails = gmail_service.fetch_emails(query=query)
 
-    # Wrap ORM calls in sync_to_async for async context
     @sync_to_async
     def get_or_create_raw_email(user, email_id, email_text):
         return RawEmail.objects.get_or_create(
@@ -141,66 +164,41 @@ def sync_user_transactions_task(user_id, start_date, end_date):
     def save_raw_email(raw_email_obj):
         raw_email_obj.save()
 
-    @sync_to_async
-    def create_transaction_if_not_exists(transaction_data):
-        Transaction.objects.get_or_create(**transaction_data)
-
-    async def process_email(email_text, idx):
-        # Use unique email id based on user_id and email index
+    async def process_email(email_details, idx):
+        email_text = email_details['body']
+        headers = email_details['headers']
         email_id = f"{user_id}_{idx}"
-
         raw_email_obj, created = await get_or_create_raw_email(user, email_id, email_text)
-
-        # Try to parse with regex-based parser
-        parsed_transaction = gmail_service.parse_transaction(email_text, user)
-
-        # If parsing fails or returns no transaction type, use AI parser async
-        if not parsed_transaction or parsed_transaction.get('transaction_type') == 'none':
-            # Call your async AI parse function here
-            parsed_transaction = await gmail_service.ai_parse_transaction_async(email_text)
-
-            raw_email_obj.parsing_method = 'ai'
-        else:
-            raw_email_obj.parsing_method = 'regex'
-
-        # Mark raw email as parsed or not
+        
+        # Extract bank name and parse with BeautifulSoup
+        bank_name = gmail_service.get_bank_name(headers)
+        parsed_transaction = gmail_service.parse_transaction(email_text, bank_name)
+        
+        raw_email_obj.parsing_method = 'bs4'
         raw_email_obj.parsed = parsed_transaction.get('transaction_type', 'none') != 'none'
         raw_email_obj.transaction_data = parsed_transaction
-
         await save_raw_email(raw_email_obj)
 
-        # If parsed successfully, normalize date and create transaction
         if raw_email_obj.parsed:
             try:
-                # Normalize date: if string, parse; if already datetime, keep it
-                date_value = parsed_transaction.get('date')
-                if isinstance(date_value, str):
-                    transaction_date = date_parser.parse(date_value)
-                else:
-                    transaction_date = date_value
-
-                parsed_transaction['date'] = transaction_date
-
-                await create_transaction_if_not_exists(parsed_transaction)
+                # Add user to transaction_data for transaction creation
+                transaction_data = parsed_transaction.copy()
+                transaction_data['user'] = user
+                transaction_data['date'] = date_parser.parse(parsed_transaction['date'])
+                await create_transaction_if_not_exists(transaction_data)
             except Exception as e:
-                # Log or handle exceptions as needed
-                print(f"Failed to create transaction for email #{idx}: {str(e)}")
+                logger.error(f"Failed to create transaction for email #{idx}: {str(e)}")
 
-    # Run all emails processing concurrently
     try:
         loop = asyncio.get_event_loop()
-    except RuntimeError:
-        # No event loop in current thread, create one
+    except:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-    tasks = [process_email(email_text, idx + 1) for idx, email_text in enumerate(emails)]
+    tasks = [process_email(email_details, idx + 1) for idx, email_details in enumerate(emails)]
     loop.run_until_complete(asyncio.gather(*tasks))
 
     return f"Transactions synced successfully for user {user_id}. Parsed: {len(emails)}, Processed: {len(tasks)}"
-
-
-
 
 @shared_task
 def categorize_transactions_for_all_users():
