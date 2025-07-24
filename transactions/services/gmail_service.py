@@ -32,28 +32,36 @@ class GmailService:
 
     def fetch_emails(self, query=''):
         """
-        Fetches a list of email messages matching the query.
-        Returns a list of dictionaries, each containing email details.
+        THE FIX: Fetches all messages within conversation threads matching the query.
+        This is more robust and prevents missing 'stacked' emails.
         """
+        all_messages = []
         try:
-            results = self.service.users().messages().list(userId='me', q=query).execute()
-            messages = results.get('messages', [])
-            if not messages:
-                logger.info("No new messages found matching query.")
-                return []
-            # This list comprehension now receives a dictionary that includes the 'id' key
-            return [self.get_email_details(m['id']) for m in messages]
+            # First, get all threads that match the query
+            threads_response = self.service.users().threads().list(userId='me', q=query).execute()
+            threads = threads_response.get('threads', [])
+            
+            for thread_info in threads:
+                # For each thread, get all of its messages
+                thread_details = self.service.users().threads().get(userId='me', id=thread_info['id']).execute()
+                messages_in_thread = thread_details.get('messages', [])
+                for message_info in messages_in_thread:
+                    # Get the full details for each message
+                    all_messages.append(self.get_email_details(message_info['id']))
+
+            logger.info(f"Found {len(all_messages)} messages across {len(threads)} threads.")
+            return all_messages
+            
         except HttpError as error:
-            logger.error(f"An HTTP error occurred while fetching emails: {error}")
-            # This could be due to an expired refresh token. The user may need to re-authenticate.
+            logger.error(f"An HTTP error occurred while fetching email threads: {error}")
             return []
         except Exception as e:
-            logger.error(f"An unexpected error occurred while fetching emails: {e}")
+            logger.error(f"An unexpected error occurred while fetching email threads: {e}")
             return []
 
     def get_email_details(self, msg_id: str) -> dict:
         """
-        Fetches a single email's body, headers, and crucially, includes its ID in the return value.
+        Fetches a single email's body, headers, and includes its ID.
         """
         try:
             message = self.service.users().messages().get(userId='me', id=msg_id, format='full').execute()
@@ -62,13 +70,11 @@ class GmailService:
             parts = payload.get('parts', [])
             data = None
 
-            # This logic correctly finds the HTML part of the email
             if parts:
                 for part in parts:
                     if part.get('mimeType') == 'text/html' and part.get('body') and part['body'].get('data'):
                         data = part['body']['data']
                         break
-                    # Handle nested parts for some email clients
                     elif part.get('parts'):
                         for subpart in part['parts']:
                             if subpart.get('mimeType') == 'text/html' and subpart.get('body') and subpart['body'].get('data'):
@@ -76,16 +82,13 @@ class GmailService:
                                 break
                         if data:
                             break
-            # Fallback for simple, non-multipart emails
             elif payload.get('body'):
                 data = payload['body'].get('data')
 
             email_text = ''
             if data:
-                # Decode the base64url encoded email body
                 email_text = base64.urlsafe_b64decode(data).decode(errors='ignore')
             
-            # THE FIX: Return a dictionary that includes the 'id'
             return {'id': msg_id, 'body': email_text, 'headers': headers}
 
         except HttpError as error:
@@ -93,7 +96,6 @@ class GmailService:
         except Exception as e:
             logger.error(f"An unexpected error occurred getting details for message {msg_id}: {e}")
         
-        # Return a default structure on any error to prevent crashes downstream
         return {'id': msg_id, 'body': '', 'headers': []}
 
     def get_bank_name(self, headers):

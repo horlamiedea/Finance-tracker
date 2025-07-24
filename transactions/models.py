@@ -32,6 +32,7 @@ class Transaction(models.Model):
     bank_name = models.CharField(max_length=100, null=True, blank=True)
     account_balance = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     receipt_items = models.JSONField(null=True, blank=True) # For receipt uploads
+    is_manually_categorized = models.BooleanField(default=False)
 
     class Meta:
         # This uniqueness constraint is key to preventing duplicates
@@ -91,6 +92,7 @@ class RawEmail(models.Model):
         choices=[
             ('none', 'None'),
             ('ai_success', 'AI Success'),
+            ('html_parser_success', 'HTML Parser Success'),
             ('ai_failed', 'AI Failed to Parse'),
             ('creation_failed_data_error', 'Transaction Creation Failed (Data Error)'),
             ('creation_failed_unknown', 'Transaction Creation Failed (Unknown Error)'),
@@ -122,3 +124,14 @@ class ItemPurchaseFrequency(models.Model):
 
     class Meta:
         unique_together = ('user', 'category', 'item_description')
+
+
+class ParserFunction(models.Model):
+    """Stores AI-generated Python code for parsing emails from a specific bank."""
+    bank_name = models.CharField(max_length=100, unique=True)
+    parser_code = models.TextField(help_text="The Python code for the parsing function.")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Parser for {self.bank_name}"

@@ -18,6 +18,7 @@ urlpatterns = [
     path('summary/', TransactionSummaryView.as_view(), name='transaction-summary'),
     path('spending-statistics/', SpendingStatisticsView.as_view(), name='spending-statistics'),
     path('report/download/', PDFReportView.as_view(), name='download-pdf-report'),
+    path('reprocess-failed/', ReprocessFailedEmailsView.as_view(), name='reprocess-failed-emails'),
 
     path('budget/', include(router.urls)),
 ]

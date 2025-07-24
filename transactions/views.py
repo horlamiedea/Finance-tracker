@@ -292,18 +292,31 @@ class PDFReportView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        # --- 1. Validate Query Parameters ---
+        # 1. Validate Query Parameters from the URL
         start_date_str = request.query_params.get('start_date')
         end_date_str = request.query_params.get('end_date')
 
         start_date = parse_date(start_date_str) if start_date_str else None
         end_date = parse_date(end_date_str) if end_date_str else None
 
-        # --- 2. Delegate to Generator Service ---
+        # 2. Delegate to the Generator Service
         generator = PDFReportGenerator(user=request.user, start_date=start_date, end_date=end_date)
         pdf_buffer = generator.generate()
 
-        # --- 3. Return PDF as HTTP Response ---
+        # 3. Return the generated PDF as an HTTP Response
         response = HttpResponse(pdf_buffer, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="financial_report_{datetime.now().strftime("%Y-%m-%d")}.pdf"'
         return response
+    
+
+class ReprocessFailedEmailsView(APIView):
+    """
+    An endpoint to manually trigger a re-scan and re-processing
+    of any emails that previously failed to be converted into transactions.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        reprocess_failed_emails_task.delay(user.id)
+        return Response({"message": "A task has been started to reprocess any failed emails. Please check your transactions again in a few minutes."})

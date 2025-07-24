@@ -73,3 +73,14 @@ class ItemPurchaseFrequencyAdmin(admin.ModelAdmin):
     )
     add_fieldsets = fieldsets
     list_display = ('user', 'item_name', 'frequency')
+
+admin.site.register(ParserFunction)
+class ParserFunctionAdmin(admin.ModelAdmin):
+    """Admin interface for ParserFunction model."""
+    search_fields = ('name',)
+    ordering = ('name',)
+    fieldsets = (
+        (None, {'fields': ('name', 'description', 'function_code')}),
+    )
+    add_fieldsets = fieldsets
+    list_display = ('name', 'description')

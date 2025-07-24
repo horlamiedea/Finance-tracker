@@ -212,3 +212,107 @@ Respond ONLY with the name of the category from the list. If no category is a go
             category = self._categorize_with_gemini(narration, categories, examples)
             
         return category or "Unknown"
+    
+
+    def generate_parser_function(self, email_html: str) -> Optional[str]:
+        """
+        Uses a powerful AI model to write a Python function that can parse
+        the given email HTML.
+        """
+        # THE FIX: The prompt now enforces defensive coding practices.
+        prompt = f"""
+You are an expert Python programmer specializing in web scraping with BeautifulSoup.
+Your task is to write a single Python function named `parse_email` that takes a BeautifulSoup `soup` object as input.
+This function must parse the provided HTML to extract financial transaction details.
+
+**EXECUTION CONTEXT:**
+Your function will be executed in a restricted scope where only the following modules are available:
+- `soup`: The BeautifulSoup object of the email HTML.
+- `re`: The Python regex module.
+- `date_parser`: The `dateutil.parser` module.
+
+**FUNCTION REQUIREMENTS:**
+- The function signature MUST be `def parse_email(soup):`.
+- The function MUST return a Python dictionary with these exact keys: "transaction_type", "amount", "date", "narration", "account_balance".
+- All values in the returned dictionary must be STRINGS, or `None` if a value cannot be found.
+
+**DEFENSIVE CODING PRACTICES (VERY IMPORTANT):**
+- When extracting text, if your selector might fail, handle the `None` case.
+- Inside every helper function you write (e.g., `extract_amount`), you MUST check if the input `text` is `None`. If it is, return `None` immediately to prevent `TypeError`. For example: `if not text: return None`. This is the most common source of errors.
+
+Here is the HTML to parse:
+```html
+{email_html}
+```
+
+Respond ONLY with the complete, raw Python code for the function. Do not add comments, explanations, or example usage.
+"""
+        try:
+            logger.info("Attempting to generate parser function with OpenAI...")
+            if not OPENAI_CLIENT:
+                raise ValueError("OpenAI client not configured.")
+            
+            response = OPENAI_CLIENT.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0
+            )
+            return response.choices[0].message.content.strip().strip('`').strip('python').strip()
+        except Exception as e:
+            logger.error(f"OpenAI parser generation failed: {e}. Trying fallback.")
+            try:
+                logger.info("Attempting to generate parser function with Gemini...")
+                if not GEMINI_CLIENT:
+                    raise ValueError("Gemini client not configured.")
+                
+                response = GEMINI_CLIENT.generate_content(prompt)
+                return response.text.strip().strip('`').strip('python').strip()
+            except Exception as e2:
+                logger.error(f"Gemini parser generation also failed: {e2}")
+                return None
+            
+    
+    def recover_missing_data_from_text(self, text_block: str) -> Optional[Dict[str, Any]]:
+        """
+        Takes a jumbled block of text from a failed parse and attempts
+        to recover the essential transaction details from it.
+        """
+        if not text_block:
+            return None
+
+        prompt = f"""
+You are a data recovery specialist. You will be given a block of messy text extracted from a financial email. Your task is to find and extract the following specific details from this text.
+
+**CRITICAL RULES for Transaction Type:**
+- A 'debit' means money is LEAVING the account. Keywords: Debit transaction, OUTWARD TRANSFER.
+- A 'credit' means money is ENTERING the account. Keywords: Credit transaction, INWARD TRANSFER.
+
+**Data to Extract:**
+1.  `transaction_type`: "debit" or "credit".
+2.  `date`: The full date and time of the transaction.
+3.  `narration`: The transaction description or narrative.
+4.  `amount`: The numerical amount of the transaction.
+5.  `account_balance`: The available balance after the transaction.
+
+Here is the messy text block:
+---
+{text_block}
+---
+
+Respond ONLY with a valid JSON object containing the keys you were able to find. If a key cannot be found, its value should be null.
+"""
+        try:
+            logger.info("Attempting data recovery with OpenAI...")
+            if not OPENAI_CLIENT:
+                raise ValueError("OpenAI client not configured.")
+
+            response = OPENAI_CLIENT.chat.completions.create(
+                model="gpt-4o-mini", # Mini is sufficient for this focused task
+                response_format={"type": "json_object"},
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0
+            )
+            return json.loads(response.choices[0].message.content)
+        except Exception as e:
+            logger.error(f"AI data recovery failed: {e}")
+            return None
