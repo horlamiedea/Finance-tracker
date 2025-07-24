@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework import generics, viewsets
 from datetime import datetime
 from django.shortcuts import redirect
 from google_auth_oauthlib.flow import Flow
@@ -14,32 +15,37 @@ from .serializers import *
 from datetime import datetime, timedelta
 from django.utils.dateparse import parse_date
 from django.db.models import Sum, Count, Q
+from .pdf_generate import PDFReportGenerator
+
+import io
+from django.http import HttpResponse
+from django.db import IntegrityError
+from django.db.models import F
+from django.db.models.functions import TruncMonth, TruncDay
+
+
+# PDF and Charting Libraries
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.lib.units import inch
+import matplotlib.pyplot as plt
+import numpy as np
 
 class GmailTransactionSyncView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
+    def post(self, request):
         user = request.user
-        
-        # Check the latest transaction date for the user
-        last_transaction = Transaction.objects.filter(user=user).order_by('-date').first()
-
-        if last_transaction:
-            # If exists, start sync from last transaction date
-            start_date = last_transaction.date
-        else:
-            # Else, start from the beginning of the current month
-            today = timezone.now()
-            start_date = timezone.make_aware(datetime(today.year, today.month, 1))
-
         end_date = timezone.now()
+        start_date = end_date - timedelta(days=30) 
 
-        # Trigger async Celery task
         sync_user_transactions_task.delay(user.id, start_date.isoformat(), end_date.isoformat())
 
         return Response({
             "status": "success",
-            "message": f"Sync initiated from {start_date.date()} to {end_date.date()}"
+            "message": f"Sync initiated for the last 30 days. Transactions will appear shortly."
         })
 
 
@@ -60,26 +66,21 @@ class AuthorizeGmailView(APIView):
                     "redirect_uris": [settings.GMAIL_REDIRECT_URI],
                 }
             },
-            scopes=SCOPES,
+            scopes=['https://www.googleapis.com/auth/gmail.readonly'],
+            redirect_uri=settings.GMAIL_REDIRECT_URI
         )
-        flow.redirect_uri = settings.GMAIL_REDIRECT_URI
-
         authorization_url, state = flow.authorization_url(
             access_type='offline',
             include_granted_scopes='true',
             prompt='consent'
         )
-        print(f"Authorization URL: {authorization_url}")
         request.session['oauth_state'] = state
+        print(f"Authorization URL: {authorization_url}")  # Debugging line
         return redirect(authorization_url)
 
-
 class OAuth2CallbackView(APIView):
-    permission_classes = [AllowAny]
-
     def get(self, request):
         state = request.session.get('oauth_state')
-
         flow = Flow.from_client_config(
             client_config={
                 "web": {
@@ -90,21 +91,23 @@ class OAuth2CallbackView(APIView):
                     "redirect_uris": [settings.GMAIL_REDIRECT_URI],
                 }
             },
-            scopes=SCOPES,
+            scopes=['https://www.googleapis.com/auth/gmail.readonly'],
             state=state,
+            redirect_uri=settings.GMAIL_REDIRECT_URI
         )
-        flow.redirect_uri = settings.GMAIL_REDIRECT_URI
-
-        authorization_response = request.build_absolute_uri()
-        flow.fetch_token(authorization_response=authorization_response)
-
+        flow.fetch_token(authorization_response=request.build_absolute_uri())
+        
         credentials = flow.credentials
-        user = request.user
-        user.gmail_token = credentials.token
-        user.gmail_refresh_token = credentials.refresh_token
-        user.save()
+        # NOTE: In a real app, you'd link credentials to the logged-in user.
+        # This part requires user session management which is assumed to be in place.
+        if request.user.is_authenticated:
+            user = request.user
+            user.gmail_token = credentials.token
+            user.gmail_refresh_token = credentials.refresh_token
+            user.save()
+            return Response({"detail": "Google authorization successful."})
+        return Response({"detail": "User not authenticated during callback."}, status=400)
 
-        return Response({"detail": "Google authorization successful."})
 
 
 
@@ -224,3 +227,83 @@ class SpendingStatisticsView(APIView):
         }
 
         return Response(data)
+    
+
+class BudgetSuggestionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        # Analyze last 90 days of spending for a 3-month average
+        ninety_days_ago = timezone.now().date() - timedelta(days=90)
+        
+        spending_data = Transaction.objects.filter(
+            user=user,
+            transaction_type='debit',
+            date__gte=ninety_days_ago,
+            category__isnull=False
+        ).values('category__id', 'category__name').annotate(
+            total_spent=Sum('amount')
+        ).order_by('-total_spent')
+
+        if not spending_data:
+            return Response({"message": "Not enough transaction data to suggest a budget."}, status=404)
+
+        suggestions = []
+        total_suggested_budget = 0
+        for item in spending_data:
+            # Average monthly spend = total over 90 days / 3
+            monthly_avg = item['total_spent'] / 3
+            suggestions.append({
+                "category": item['category__id'],
+                "category_name": item['category__name'],
+                "budgeted_amount": round(float(monthly_avg), 2)
+            })
+            total_suggested_budget += monthly_avg
+
+        response_data = {
+            "name": "Suggested Monthly Budget",
+            "start_date": timezone.now().date().replace(day=1),
+            "end_date": (timezone.now().date().replace(day=1) + timedelta(days=31)).replace(day=1) - timedelta(days=1),
+            "total_suggested_budget": round(float(total_suggested_budget), 2),
+            "items": suggestions
+        }
+        return Response(response_data)
+
+
+class BudgetViewSet(viewsets.ModelViewSet):
+    serializer_class = BudgetSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Budget.objects.filter(user=self.request.user).prefetch_related('items__category')
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+
+
+class PDFReportView(APIView):
+    """
+    Handles the request for a PDF report, validates parameters,
+    and delegates the complex generation logic to the PDFReportGenerator.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        # --- 1. Validate Query Parameters ---
+        start_date_str = request.query_params.get('start_date')
+        end_date_str = request.query_params.get('end_date')
+
+        start_date = parse_date(start_date_str) if start_date_str else None
+        end_date = parse_date(end_date_str) if end_date_str else None
+
+        # --- 2. Delegate to Generator Service ---
+        generator = PDFReportGenerator(user=request.user, start_date=start_date, end_date=end_date)
+        pdf_buffer = generator.generate()
+
+        # --- 3. Return PDF as HTTP Response ---
+        response = HttpResponse(pdf_buffer, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="financial_report_{datetime.now().strftime("%Y-%m-%d")}.pdf"'
+        return response

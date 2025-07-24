@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 from bs4 import BeautifulSoup
+from googleapiclient.errors import HttpError
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ client = OpenAI()
 
 class GmailService:
     def __init__(self, credentials_dict):
+        """Initializes the Gmail Service client."""
         self.creds = Credentials(
             token=credentials_dict.get('token'),
             refresh_token=credentials_dict.get('refresh_token'),
@@ -29,34 +31,70 @@ class GmailService:
         self.service = build('gmail', 'v1', credentials=self.creds)
 
     def fetch_emails(self, query=''):
-        results = self.service.users().messages().list(userId='me', q=query).execute()
-        messages = results.get('messages', [])
-        return [self.get_email_details(m['id']) for m in messages]
+        """
+        Fetches a list of email messages matching the query.
+        Returns a list of dictionaries, each containing email details.
+        """
+        try:
+            results = self.service.users().messages().list(userId='me', q=query).execute()
+            messages = results.get('messages', [])
+            if not messages:
+                logger.info("No new messages found matching query.")
+                return []
+            # This list comprehension now receives a dictionary that includes the 'id' key
+            return [self.get_email_details(m['id']) for m in messages]
+        except HttpError as error:
+            logger.error(f"An HTTP error occurred while fetching emails: {error}")
+            # This could be due to an expired refresh token. The user may need to re-authenticate.
+            return []
+        except Exception as e:
+            logger.error(f"An unexpected error occurred while fetching emails: {e}")
+            return []
 
-    def get_email_details(self, msg_id):
-        """Fetch email body and headers."""
-        message = self.service.users().messages().get(userId='me', id=msg_id).execute()
-        payload = message['payload']
-        headers = payload['headers']
-        parts = payload.get('parts', [])
-        data = None
-        if parts:
-            for part in parts:
-                if part.get('mimeType') == 'text/html' and part.get('body') and part['body'].get('data'):
-                    data = part['body']['data']
-                    break
-                elif part.get('parts'):
-                    for subpart in part['parts']:
-                        if subpart.get('mimeType') == 'text/html' and subpart.get('body') and subpart['body'].get('data'):
-                            data = subpart['body']['data']
+    def get_email_details(self, msg_id: str) -> dict:
+        """
+        Fetches a single email's body, headers, and crucially, includes its ID in the return value.
+        """
+        try:
+            message = self.service.users().messages().get(userId='me', id=msg_id, format='full').execute()
+            payload = message.get('payload', {})
+            headers = payload.get('headers', [])
+            parts = payload.get('parts', [])
+            data = None
+
+            # This logic correctly finds the HTML part of the email
+            if parts:
+                for part in parts:
+                    if part.get('mimeType') == 'text/html' and part.get('body') and part['body'].get('data'):
+                        data = part['body']['data']
+                        break
+                    # Handle nested parts for some email clients
+                    elif part.get('parts'):
+                        for subpart in part['parts']:
+                            if subpart.get('mimeType') == 'text/html' and subpart.get('body') and subpart['body'].get('data'):
+                                data = subpart['body']['data']
+                                break
+                        if data:
                             break
-        else:
-            data = payload['body'].get('data')
+            # Fallback for simple, non-multipart emails
+            elif payload.get('body'):
+                data = payload['body'].get('data')
 
-        if not data:
-            return {'body': '', 'headers': headers}
-        email_text = base64.urlsafe_b64decode(data).decode(errors='ignore')
-        return {'body': email_text, 'headers': headers}
+            email_text = ''
+            if data:
+                # Decode the base64url encoded email body
+                email_text = base64.urlsafe_b64decode(data).decode(errors='ignore')
+            
+            # THE FIX: Return a dictionary that includes the 'id'
+            return {'id': msg_id, 'body': email_text, 'headers': headers}
+
+        except HttpError as error:
+            logger.error(f"An HTTP error occurred getting details for message {msg_id}: {error}")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred getting details for message {msg_id}: {e}")
+        
+        # Return a default structure on any error to prevent crashes downstream
+        return {'id': msg_id, 'body': '', 'headers': []}
 
     def get_bank_name(self, headers):
         """Determine bank name from email headers by extracting the domain part between '@' and '.com' or '.ng'."""
