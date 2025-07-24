@@ -100,6 +100,8 @@ class RawEmail(models.Model):
         default='none'
     )
     transaction_data = models.JSONField(null=True, blank=True)
+    bank_name = models.CharField(max_length=100, null=True, blank=True)  # New field
+    sent_date = models.DateTimeField(null=True, blank=True)  # New field
 
     class Meta:
         unique_together = ('user', 'email_id')

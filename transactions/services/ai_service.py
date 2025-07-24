@@ -35,32 +35,26 @@ class AIService:
     """
 
     def _get_extraction_prompt(self) -> str:
-        """
-        Generates the system prompt for transaction extraction.
-        THE FIX: This prompt is now much more specific to avoid misclassification.
-        """
-        return """
-You are an expert financial data extraction API. You will be given the text content of a bank transaction email.
-Your task is to extract the following details and return them as a SINGLE, VALID JSON object.
-Do not include any text, markdown, or formatting before or after the JSON object.
+        return """You are an expert financial data extraction API. You will be given the text content of a bank transaction email.
+    Your task is to extract the following details and return them as a SINGLE, VALID JSON object.
+    Do not include any text, markdown, or formatting before or after the JSON object.
 
-**CRITICAL RULES for Transaction Type:**
-- A 'debit' means money is LEAVING the account. Keywords: Debit Alert, Transfer to, Payment to, sent, purchase, withdrawal. If the account balance goes DOWN, it is a debit.
-- A 'credit' means money is ENTERING the account. Keywords: Credit Alert, Received from, deposit, payment received. If the account balance goes UP, it is a credit.
-- For transfers, if the email says "Transfer to [someone]" or "Transfer Successful" (implying you sent it), it is a DEBIT. If it says "Transfer from [someone]", it is a CREDIT.
+    **CRITICAL RULES for Transaction Type:**
+    - A 'debit' means money is LEAVING the account. Keywords: Debit Alert, Transfer to, Payment to, sent, purchase, withdrawal.
+    - A 'credit' means money is ENTERING the account. Keywords: Credit Alert, Received from, deposit, payment received.
 
-The required JSON keys are:
-- "transaction_type": Must be either "debit" or "credit". Use the rules above to determine this accurately.
-- "amount": The transaction amount as a number (float or integer).
-- "currency": The currency code (e.g., "NGN", "USD"). Default to "NGN" if not specified.
-- "date": The date of the transaction in "YYYY-MM-DD HH:MM:SS" format.
-- "narration": A brief description or narration of the transaction.
-- "bank_name": The name of the bank (e.g., "Providus Bank", "Opay", "UBA").
-- "account_balance": The available account balance after the transaction, as a number. If not available, use null.
+    The required JSON keys are:
+    - "transaction_type": Must be either "debit" or "credit".
+    - "amount": The transaction amount as a string (e.g., "300250.00").
+    - "currency": The currency code (e.g., "NGN", "USD"). Default to "NGN" if not specified.
+    - "date": The date of the transaction in any parseable format (e.g., "YYYY-MM-DD HH:MM:SS" or "Fri, Jun 27, 2025 at 9:10 PM").
+    - "narration": A brief description or narration of the transaction.
+    - "bank_name": The name of the bank (e.g., "Providus Bank", "Moniepoint"). Note: This may be overridden by email metadata.
+    - "account_balance": The available account balance after the transaction, as a string. Use null if not available.
 
-If you cannot find a specific piece of information, set its value to null.
-If the email is not a transaction alert, return a JSON object with "transaction_type" set to null.
-"""
+    If you cannot find a specific piece of information, set its value to null.
+    If the email is not a transaction alert, return a JSON object with "transaction_type" set to null.
+    """
 
     def _parse_with_openai(self, text_content: str) -> Optional[Dict[str, Any]]:
         """Attempts to parse transaction data using OpenAI's GPT-4o mini."""

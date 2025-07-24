@@ -9,6 +9,7 @@ from openai import OpenAI
 from django.conf import settings
 from asgiref.sync import sync_to_async
 import asyncio
+import pytz
 import json
 import logging
 from bs4 import BeautifulSoup
@@ -60,9 +61,6 @@ class GmailService:
             return []
 
     def get_email_details(self, msg_id: str) -> dict:
-        """
-        Fetches a single email's body, headers, and includes its ID.
-        """
         try:
             message = self.service.users().messages().get(userId='me', id=msg_id, format='full').execute()
             payload = message.get('payload', {})
@@ -88,24 +86,33 @@ class GmailService:
             email_text = ''
             if data:
                 email_text = base64.urlsafe_b64decode(data).decode(errors='ignore')
-            
-            return {'id': msg_id, 'body': email_text, 'headers': headers}
+
+            # Extract sent date from headers and make it timezone-aware
+            sent_date_str = next((h['value'] for h in headers if h['name'].lower() == 'date'), None)
+            sent_date = None
+            if sent_date_str:
+                try:
+                    sent_date = date_parser.parse(sent_date_str)
+                    if sent_date.tzinfo is None:
+                        sent_date = sent_date.replace(tzinfo=pytz.UTC)
+                except ValueError:
+                    logger.warning(f"Could not parse sent date: {sent_date_str}")
+
+            return {'id': msg_id, 'body': email_text, 'headers': headers, 'sent_date': sent_date}
 
         except HttpError as error:
             logger.error(f"An HTTP error occurred getting details for message {msg_id}: {error}")
         except Exception as e:
             logger.error(f"An unexpected error occurred getting details for message {msg_id}: {e}")
-        
-        return {'id': msg_id, 'body': '', 'headers': []}
+        return {'id': msg_id, 'body': '', 'headers': [], 'sent_date': None}
 
     def get_bank_name(self, headers):
-        """Determine bank name from email headers by extracting the domain part between '@' and '.com' or '.ng'."""
         from_header = next((h['value'] for h in headers if h['name'].lower() == 'from'), '')
         subject_header = next((h['value'] for h in headers if h['name'].lower() == 'subject'), '')
 
         domain_match = re.search(r'@([a-zA-Z0-9\-]+)\.(com|ng)', from_header)
         if domain_match:
-            domain = domain_match.group(1)
+            domain = domain_match.group(1).lower()
             bank_name_map = {
                 'providusbank': 'Providus Bank',
                 'opay-nigeria': 'Opay',
@@ -113,18 +120,23 @@ class GmailService:
                 'wemabank': 'Wema Bank',
                 'uba': 'UBA Bank',
                 'zenithbank': 'Zenith Bank',
+                'moniepoint': 'Moniepoint',  # Added for your example
             }
-            bank_name = bank_name_map.get(domain.lower())
+            bank_name = bank_name_map.get(domain)
             if bank_name:
                 return bank_name
             return ' '.join(word.capitalize() for word in domain.split('-'))
 
-        if 'ProvidusBank' in subject_header:
+        # Fallback to subject line
+        subject_lower = subject_header.lower()
+        if 'providusbank' in subject_lower:
             return 'Providus Bank'
-        elif 'OPay' in subject_header:
+        elif 'opay' in subject_lower:
             return 'Opay'
-        elif 'Alat' in subject_header:
+        elif 'alat' in subject_lower:
             return 'Alat'
+        elif 'moniepoint' in subject_lower:
+            return 'Moniepoint'
         return 'Unknown'
 
     def parse_transaction(self, email_text, bank_name):

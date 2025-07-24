@@ -8,6 +8,7 @@ from decimal import Decimal
 from datetime import datetime
 from google.auth.exceptions import RefreshError
 import os, re
+import pytz
 import difflib
 from openai import OpenAI
 from dateutil import parser as date_parser
@@ -26,12 +27,43 @@ User = get_user_model()
 client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
+def extract_decimal(value):
+    """Extracts a decimal number from a string, removing currency symbols and commas."""
+    if not value:
+        return None
+    match = re.search(r'\d[\d,\.]*', str(value))
+    if match:
+        num_str = match.group().replace(',', '')
+        try:
+            return Decimal(num_str)
+        except:
+            return None
+    return None
+
+def parse_date_with_fallback(date_str):
+    """Attempts to parse a date string with multiple formats, returning None if all fail."""
+    if not date_str:
+        return None
+    try:
+        # Standard parsing with dateutil
+        parsed_date = date_parser.parse(date_str, fuzzy=True)
+        return parsed_date
+    except ValueError:
+        # Try custom formats for cases like "02 Jul, 2025 | 01:24:13 PM"
+        try:
+            # Handle formats like "DD Mon, YYYY | HH:MM:SS AM/PM"
+            match = re.match(r'(\d{1,2}\s+\w{3},\s+\d{4})\s+\|\s+(\d{2}:\d{2}:\d{2}\s+[AP]M)', date_str)
+            if match:
+                date_part, time_part = match.groups()
+                combined = f"{date_part} {time_part}"
+                return date_parser.parse(combined)
+        except ValueError:
+            pass
+        logger.warning(f"Failed to parse date: {date_str}")
+        return None
+
 @shared_task(max_retries=2, default_retry_delay=60)
 def process_raw_email_task(raw_email_id: int):
-    """
-    Processes a raw email using an advanced, self-improving tiered approach
-    with a final data recovery step for incomplete parses.
-    """
     try:
         raw_email = RawEmail.objects.get(id=raw_email_id)
     except RawEmail.DoesNotExist:
@@ -46,7 +78,7 @@ def process_raw_email_task(raw_email_id: int):
     parsed_data = None
     parsing_method_used = 'none'
 
-    # --- Step 1 & 2: Attempt parsing with saved functions or generate a new one ---
+    # Step 1 & 2: Attempt parsing with saved functions or generate a new one
     parsed_data = html_parser.run_all_parsers(raw_email.raw_text)
     if parsed_data:
         parsing_method_used = 'dynamic_html_parser_success'
@@ -59,60 +91,83 @@ def process_raw_email_task(raw_email_id: int):
                 if parsed_data:
                     ParserFunction.objects.update_or_create(bank_name=bank_name, defaults={'parser_code': new_parser_code})
                     parsing_method_used = 'ai_generated_parser_success'
-    
-    # --- Step 3: Final fallback to direct AI extraction ---
+
+    # Step 3: Final fallback to direct AI extraction
     if not parsed_data:
         parsed_data = ai_service.extract_transaction_from_email(raw_email.raw_text)
         if parsed_data:
             parsing_method_used = 'ai_fallback_success'
 
-    # --- Step 4: Validate and Process the Data ---
+    # Step 4: Validate and Process the Data
     if not parsed_data:
         raw_email.parsed = True
         raw_email.parsing_method = 'all_methods_failed'
         raw_email.save()
-        logger.critical(f"CRITICAL: All parsing methods failed for RawEmail ID {raw_email.id}. Manual review required.")
+        logger.critical(f"CRITICAL: All parsing methods failed for RawEmail ID {raw_email.id}.")
         return
 
-    # --- Step 5: Data Recovery for Incomplete Parses ---
+    # Step 5: Data Recovery for Incomplete Parses
     is_data_complete = all(parsed_data.get(key) for key in ['amount', 'date', 'transaction_type', 'narration'])
     if not is_data_complete and parsed_data.get('narration'):
         logger.warning(f"Initial parse for RawEmail {raw_email.id} is incomplete. Attempting data recovery...")
         recovered_data = ai_service.recover_missing_data_from_text(parsed_data['narration'])
         if recovered_data:
-            # Update the original parsed_data with any fields the recovery found
-            # This uses the recovered value only if the original was missing.
             for key, value in recovered_data.items():
                 if not parsed_data.get(key) and value is not None:
                     parsed_data[key] = value
             logger.info(f"Successfully recovered data for RawEmail {raw_email.id}.")
 
-    # --- Step 6: Handle Non-Transactional Emails ---
+    # Step 6: Handle Non-Transactional Emails
     narration_lower = (parsed_data.get('narration') or "").lower()
-    non_transactional_keywords = ['log in confirmation', 'security alert', 'password reset', 'welcome back']
-    if any(keyword in narration_lower for keyword in non_transactional_keywords):
+    non_transactional_keywords = [
+        'log in confirmation', 'security alert', 'password reset', 'welcome back',
+        'failed transaction', 'insufficient funds', 'failed card transaction'
+    ]
+    if any(keyword in narration_lower for keyword in non_transactional_keywords) or parsed_data.get('transaction_type') is None:
         logger.info(f"Detected and deleting non-transactional email (ID: {raw_email.id})")
         raw_email.delete()
         return
 
-    # --- Step 7: Final Validation and Transaction Creation ---
+    # Step 7: Final Validation and Transaction Creation
     try:
-        amount_str = (parsed_data.get('amount') or '0').replace(',', '')
-        amount = Decimal(amount_str)
+        amount = extract_decimal(parsed_data.get('amount'))
+        account_balance = extract_decimal(parsed_data.get('account_balance'))
         date_str = parsed_data.get('date')
         trans_type = parsed_data.get('transaction_type')
         narration = parsed_data.get('narration')
 
-        if not all([amount_str, date_str, trans_type, narration]):
-             raise ValueError("Essential data (amount, date, type, or narration) is missing even after recovery.")
+        if not all([amount, date_str, trans_type, narration]):
+            raise ValueError("Essential data (amount, date, type, or narration) is missing.")
 
-        trans_date = date_parser.parse(date_str)
-        
+        trans_date = parse_date_with_fallback(date_str)
+        if not trans_date:
+            raise ValueError(f"Could not parse date: {date_str}")
+
+        # Ensure both dates are timezone-aware or naive for comparison
+        if raw_email.sent_date:
+            # Make both dates timezone-aware (UTC)
+            if trans_date.tzinfo is None:
+                trans_date = trans_date.replace(tzinfo=pytz.UTC)
+            if raw_email.sent_date.tzinfo is None:
+                raw_email.sent_date = raw_email.sent_date.replace(tzinfo=pytz.UTC)
+            # Validate date: if future relative to sent_date, use sent_date
+            if trans_date > raw_email.sent_date:
+                logger.warning(f"Parsed date {trans_date} is after sent date {raw_email.sent_date}. Using sent date.")
+                trans_date = raw_email.sent_date
+        else:
+            # If no sent_date, ensure trans_date is timezone-aware
+            if trans_date.tzinfo is None:
+                trans_date = trans_date.replace(tzinfo=pytz.UTC)
+
         transaction, created = Transaction.objects.get_or_create(
-            user=raw_email.user, amount=amount, date=trans_date, transaction_type=trans_type, narration=narration,
+            user=raw_email.user,
+            amount=amount,
+            date=trans_date,
+            transaction_type=trans_type,
+            narration=narration,
             defaults={
-                'bank_name': parsed_data.get('bank_name'),
-                'account_balance': Decimal(str(parsed_data.get('account_balance')).replace(',', '')) if parsed_data.get('account_balance') else None,
+                'bank_name': raw_email.bank_name,
+                'account_balance': account_balance,
             }
         )
 
@@ -122,12 +177,12 @@ def process_raw_email_task(raw_email_id: int):
         raw_email.save()
 
         if created:
-            logger.info(f"Successfully created transaction for RawEmail {raw_email.id} using {parsing_method_used}.")
+            logger.info(f"Created transaction for RawEmail {raw_email.id} using {parsing_method_used}.")
         else:
-            logger.info(f"Transaction from RawEmail {raw_email.id} already exists.")
+            logger.info(f"Transaction for RawEmail {raw_email.id} already exists.")
 
-    except (ValueError, InvalidOperation, TypeError) as e:
-        logger.error(f"Final data validation or type error for RawEmail {raw_email.id}. Error: {e}, Data: {parsed_data}")
+    except Exception as e:
+        logger.error(f"Error for RawEmail {raw_email.id}. Error: {str(e)}, Data: {parsed_data}")
         raw_email.parsing_method = 'creation_failed_data_error'
         raw_email.transaction_data = parsed_data
         raw_email.save()
@@ -212,12 +267,8 @@ def process_email_with_ai(raw_email_id: int):
         raw_email.save()
 
 
-@shared_task
+@shared_task(max_retries=3, default_retry_delay=60)
 def sync_user_transactions_task(user_id, start_date_iso, end_date_iso):
-    """
-    Fetches emails for a user, saves them to the RawEmail model,
-    and triggers the AI processing task for each new email.
-    """
     try:
         user = User.objects.get(id=user_id)
     except User.DoesNotExist:
@@ -231,20 +282,19 @@ def sync_user_transactions_task(user_id, start_date_iso, end_date_iso):
         "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
         "token_uri": "https://oauth2.googleapis.com/token",
     }
-    
+
     if not all(c for c in [user.gmail_token, user.gmail_refresh_token]):
         logger.error(f"Missing Gmail OAuth credentials for user {user_id}")
         return
 
     gmail_service = GmailService(credentials_dict)
-    
+
     bank_domains = [
         "providusbank.com", "moniepoint.com", "opay-nigeria.com",
         "uba.com", "gtbank.com", "zenithbank.com", "accessbankplc.com",
         "firstbanknigeria.com", "wemabank.com", "alat.ng", "kudabank.com"
     ]
     from_query = " OR ".join([f"from:{domain}" for domain in bank_domains])
-    
     query = f"after:{start_date_iso.split('T')[0]} before:{end_date_iso.split('T')[0]} {{ {from_query} }}"
 
     logger.info(f"Using Gmail query: {query}")
@@ -259,18 +309,22 @@ def sync_user_transactions_task(user_id, start_date_iso, end_date_iso):
     for email_details in emails:
         email_body = email_details['body']
         message_id = email_details['id']
+        sent_date = email_details.get('sent_date')
+        bank_name = gmail_service.get_bank_name(email_details['headers'])
 
         if not RawEmail.objects.filter(user=user, email_id=message_id).exists():
             raw_email = RawEmail.objects.create(
                 user=user,
                 email_id=message_id,
                 raw_text=email_body,
+                bank_name=bank_name,
+                sent_date=sent_date,
                 parsing_method='none'
             )
             process_raw_email_task.delay(raw_email.id)
             email_count += 1
 
-    logger.info(f"Found {len(emails)} total emails, initiating processing for {email_count} new emails for user {user.username}.")
+    logger.info(f"Found {len(emails)} emails, processing {email_count} new ones for user {user.username}.")
     return f"Initiated processing for {email_count} new emails for user {user.username}."
 
 @shared_task
