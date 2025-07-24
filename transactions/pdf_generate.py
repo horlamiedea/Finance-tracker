@@ -64,7 +64,7 @@ class PDFReportGenerator:
         
         spending_by_category = debits.values('category__name').annotate(total=Sum('amount')).order_by('-total')
         if spending_by_category:
-            self._add_spending_chart(spending_by_category)
+            self._add_spending_chart(spending_by_category, total_spent)
         
         self._add_budget_forecast(spending_by_category)
         
@@ -98,22 +98,58 @@ class PDFReportGenerator:
         self.story.append(table)
         self.story.append(Spacer(1, 0.25 * inch))
 
-    def _add_spending_chart(self, data):
+    def _add_spending_chart(self, data, total_spent):
+        """
+        THE FIX: This method now creates a much cleaner "donut" chart by grouping
+        small categories into an "Others" slice.
+        """
         self.story.append(Paragraph("Spending by Category", self.styles['h2']))
-        labels = [item['category__name'] or "Uncategorized" for item in data]
-        sizes = [item['total'] for item in data]
+        
+        labels = []
+        sizes = []
+        others_total = 0
+        
+        # Group categories that are less than 3% of total spending
+        for item in data:
+            percentage = (item['total'] / total_spent) * 100 if total_spent > 0 else 0
+            if percentage < 3:
+                others_total += item['total']
+            else:
+                labels.append(item['category__name'] or "Uncategorized")
+                sizes.append(item['total'])
+        
+        if others_total > 0:
+            labels.append("Others")
+            sizes.append(others_total)
+            
+        # Define a professional color palette
         colors_palette = plt.cm.Pastel2(np.linspace(0, 1, len(labels)))
-
-        fig, ax = plt.subplots()
-        ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90, colors=colors_palette, wedgeprops=dict(width=0.4))
+        
+        fig, ax = plt.subplots(figsize=(6, 4))
+        
+        # Create the donut chart
+        wedges, texts, autotexts = ax.pie(
+            sizes, 
+            labels=labels, 
+            autopct='%1.1f%%', 
+            startangle=90, 
+            colors=colors_palette, 
+            wedgeprops=dict(width=0.4, edgecolor='w'),
+            pctdistance=0.80 # Move percentage text inside the donut
+        )
+        
+        # Improve label appearance
+        plt.setp(autotexts, size=8, weight="bold", color="white")
+        plt.setp(texts, size=10)
+        
         ax.axis('equal')
         
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', transparent=True)
+        plt.savefig(buf, format='png', transparent=True, bbox_inches='tight')
         buf.seek(0)
         plt.close(fig)
         
-        self.story.append(Image(buf, width=4*inch, height=3*inch))
+        self.story.append(Image(buf, width=5*inch, height=3.5*inch))
         self.story.append(Spacer(1, 0.25 * inch))
 
     def _add_budget_forecast(self, spending_this_period):
@@ -194,7 +230,7 @@ class PDFReportGenerator:
     def _add_transaction_table(self, debits):
         self.story.append(Paragraph("Recent Debits in Period", self.styles['h2']))
         table_data = [['Date', 'Narration', 'Category', 'Amount']]
-        for tx in debits.order_by('-date')[:15]:
+        for tx in debits.order_by('-date'):
             table_data.append([
                 tx.date.strftime('%Y-%m-%d'),
                 Paragraph(tx.narration, self.styles['BodyText']),
