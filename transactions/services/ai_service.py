@@ -48,7 +48,7 @@ class AIService:
     - "amount": The transaction amount as a string (e.g., "300250.00").
     - "currency": The currency code (e.g., "NGN", "USD"). Default to "NGN" if not specified.
     - "date": The date of the transaction in any parseable format (e.g., "YYYY-MM-DD HH:MM:SS" or "Fri, Jun 27, 2025 at 9:10 PM").
-    - "narration": A brief description or narration of the transaction.
+    - "narration": The actual transaction narration, narrative, or description ONLY. Do NOT include the entire email, greetings, disclaimers, or unrelated details. If there is a field labeled "Narration", "Narrative", or "Description", extract ONLY its value. If not, extract the briefest phrase that describes the transaction (e.g., "POS PURCHASE AT SHOPRITE" or "Transfer to John Doe").
     - "bank_name": The name of the bank (e.g., "Providus Bank", "Moniepoint"). Note: This may be overridden by email metadata.
     - "account_balance": The available account balance after the transaction, as a string. Use null if not available.
 

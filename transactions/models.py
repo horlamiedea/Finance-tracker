@@ -102,7 +102,7 @@ class RawEmail(models.Model):
     transaction_data = models.JSONField(null=True, blank=True)
     bank_name = models.CharField(max_length=100, null=True, blank=True)  # New field
     sent_date = models.DateTimeField(null=True, blank=True)  # New field
-    manual_review_needed = models.BooleanField(default=False)  # Flag for manual review
+    manual_review_needed = models.BooleanField(default=False)  
 
     class Meta:
         unique_together = ('user', 'email_id')

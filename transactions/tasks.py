@@ -120,9 +120,18 @@ def process_raw_email_task(raw_email_id: int):
         # Try to extract date
         date_match = re.search(r'\d{1,2}[-/]\d{1,2}[-/]\d{4}\s+\d{2}:\d{2}:\d{2}|\w+\s+\d{1,2}(?:th|st|nd|rd)?,\s+\d{4}\s+\d{2}:\d{2}:\d{2}', text)
         date = date_match.group(0) if date_match else None
-        # Try to extract narration
-        narration_match = re.search(r'(?:Narration|Narrative|Note|Description):?\s*(.+?)(?=\n|\s{2,}|$)', text, re.IGNORECASE)
-        narration = narration_match.group(1).strip() if narration_match else None
+        # Try to extract narration/narrative/description only
+        narration = None
+        narration_match = re.search(r'(?:Narration|Narrative|Description):?\s*(.+?)(?=\n|\s{2,}|$)', text, re.IGNORECASE)
+        if narration_match:
+            narration = narration_match.group(1).strip()
+        else:
+            # Try to find a short phrase that looks like a transaction description (e.g., after "for", "to", "at", etc.)
+            short_desc_match = re.search(r'(?:for|to|at)\s+([A-Za-z0-9\s\-\.\,\&]+?)(?=[\.\,\n]|$)', text, re.IGNORECASE)
+            if short_desc_match:
+                narration = short_desc_match.group(1).strip()
+            else:
+                narration = None
         # Try to extract account balance
         balance_match = re.search(r'(?:Balance|Available Balance).*?(?:NGN|₦)?\s*([\d,]+\.\d{2})', text, re.IGNORECASE)
         account_balance = balance_match.group(1).replace(',', '') if balance_match else None
