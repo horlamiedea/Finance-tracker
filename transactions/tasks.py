@@ -98,13 +98,140 @@ def process_raw_email_task(raw_email_id: int):
         if parsed_data:
             parsing_method_used = 'ai_fallback_success'
 
-    # Step 4: Validate and Process the Data
+    # Step 4: Final fallback to regex/subject line extraction
     if not parsed_data:
-        raw_email.parsed = True
-        raw_email.parsing_method = 'all_methods_failed'
-        raw_email.save()
-        logger.critical(f"CRITICAL: All parsing methods failed for RawEmail ID {raw_email.id}.")
+        # Try to extract transaction type from subject line as a last resort
+        from bs4 import BeautifulSoup
+        import re
+        soup = BeautifulSoup(raw_email.raw_text, 'html.parser')
+        text = soup.get_text(separator=' ', strip=True)
+        subject = ""
+        if hasattr(raw_email, "bank_name") and raw_email.bank_name:
+            subject = raw_email.bank_name.lower()
+        # Try to infer transaction type from subject or text
+        transaction_type = None
+        if "debit" in text.lower() or "debit" in subject:
+            transaction_type = "debit"
+        elif "credit" in text.lower() or "credit" in subject:
+            transaction_type = "credit"
+        # Try to extract amount
+        amount_match = re.search(r'(?:NGN|₦)?\s*([\d,]+\.\d{2})', text)
+        amount = amount_match.group(1).replace(',', '') if amount_match else None
+        # Try to extract date
+        date_match = re.search(r'\d{1,2}[-/]\d{1,2}[-/]\d{4}\s+\d{2}:\d{2}:\d{2}|\w+\s+\d{1,2}(?:th|st|nd|rd)?,\s+\d{4}\s+\d{2}:\d{2}:\d{2}', text)
+        date = date_match.group(0) if date_match else None
+        # Try to extract narration
+        narration_match = re.search(r'(?:Narration|Narrative|Note|Description):?\s*(.+?)(?=\n|\s{2,}|$)', text, re.IGNORECASE)
+        narration = narration_match.group(1).strip() if narration_match else None
+        # Try to extract account balance
+        balance_match = re.search(r'(?:Balance|Available Balance).*?(?:NGN|₦)?\s*([\d,]+\.\d{2})', text, re.IGNORECASE)
+        account_balance = balance_match.group(1).replace(',', '') if balance_match else None
+
+        parsed_data = {
+            "transaction_type": transaction_type,
+            "amount": amount,
+            "date": date,
+            "narration": narration,
+            "account_balance": account_balance,
+            "bank_name": raw_email.bank_name,
+        }
+
+    # Step 5: Validate and Process the Data
+    is_data_complete = all(parsed_data.get(key) for key in ['amount', 'date', 'transaction_type', 'narration'])
+    if not is_data_complete and parsed_data.get('narration'):
+        logger.warning(f"Initial parse for RawEmail {raw_email.id} is incomplete. Attempting data recovery...")
+        recovered_data = ai_service.recover_missing_data_from_text(parsed_data['narration'])
+        if recovered_data:
+            for key, value in recovered_data.items():
+                if not parsed_data.get(key) and value is not None:
+                    parsed_data[key] = value
+            logger.info(f"Successfully recovered data for RawEmail {raw_email.id}.")
+
+    # Step 6: Handle Non-Transactional Emails
+    narration_lower = (parsed_data.get('narration') or "").lower()
+    non_transactional_keywords = [
+        'log in confirmation', 'security alert', 'password reset', 'welcome back',
+        'failed transaction', 'insufficient funds', 'failed card transaction'
+    ]
+    if any(keyword in narration_lower for keyword in non_transactional_keywords) or parsed_data.get('transaction_type') is None:
+        logger.info(f"Detected and deleting non-transactional email (ID: {raw_email.id})")
+        raw_email.delete()
         return
+
+    # Step 7: Final Validation and Transaction Creation
+    try:
+        amount = extract_decimal(parsed_data.get('amount'))
+        account_balance = extract_decimal(parsed_data.get('account_balance'))
+        date_str = parsed_data.get('date')
+        trans_type = parsed_data.get('transaction_type')
+        narration = parsed_data.get('narration')
+
+        if not all([amount, date_str, trans_type, narration]):
+            # Mark for manual review if essential data is missing
+            raw_email.parsed = True
+            raw_email.manual_review_needed = True
+            raw_email.parsing_method = 'all_methods_failed'
+            raw_email.transaction_data = parsed_data
+            raw_email.save()
+            logger.critical(f"CRITICAL: All parsing methods failed for RawEmail ID {raw_email.id}. Marked for manual review.")
+            return
+
+        trans_date = parse_date_with_fallback(date_str)
+        if not trans_date:
+            raw_email.parsed = True
+            raw_email.manual_review_needed = True
+            raw_email.parsing_method = 'all_methods_failed'
+            raw_email.transaction_data = parsed_data
+            raw_email.save()
+            logger.critical(f"CRITICAL: Could not parse date for RawEmail ID {raw_email.id}. Marked for manual review.")
+            return
+
+        # Ensure both dates are timezone-aware or naive for comparison
+        if raw_email.sent_date:
+            # Make both dates timezone-aware (UTC)
+            if trans_date.tzinfo is None:
+                trans_date = trans_date.replace(tzinfo=pytz.UTC)
+            if raw_email.sent_date.tzinfo is None:
+                raw_email.sent_date = raw_email.sent_date.replace(tzinfo=pytz.UTC)
+            # Validate date: if future relative to sent_date, use sent_date
+            if trans_date > raw_email.sent_date:
+                logger.warning(f"Parsed date {trans_date} is after sent date {raw_email.sent_date}. Using sent date.")
+                trans_date = raw_email.sent_date
+        else:
+            # If no sent_date, ensure trans_date is timezone-aware
+            if trans_date.tzinfo is None:
+                trans_date = trans_date.replace(tzinfo=pytz.UTC)
+
+        transaction, created = Transaction.objects.get_or_create(
+            user=raw_email.user,
+            amount=amount,
+            date=trans_date,
+            transaction_type=trans_type,
+            narration=narration,
+            defaults={
+                'bank_name': raw_email.bank_name,
+                'account_balance': account_balance,
+            }
+        )
+
+        raw_email.parsed = True
+        raw_email.manual_review_needed = False
+        raw_email.parsing_method = parsing_method_used
+        raw_email.transaction_data = parsed_data
+        raw_email.save()
+
+        if created:
+            logger.info(f"Created transaction for RawEmail {raw_email.id} using {parsing_method_used}.")
+        else:
+            logger.info(f"Transaction for RawEmail {raw_email.id} already exists.")
+
+    except Exception as e:
+        logger.error(f"Error for RawEmail {raw_email.id}. Error: {str(e)}, Data: {parsed_data}")
+        raw_email.parsed = True
+        raw_email.manual_review_needed = True
+        raw_email.parsing_method = 'creation_failed_data_error'
+        raw_email.transaction_data = parsed_data
+        raw_email.save()
 
     # Step 5: Data Recovery for Incomplete Parses
     is_data_complete = all(parsed_data.get(key) for key in ['amount', 'date', 'transaction_type', 'narration'])

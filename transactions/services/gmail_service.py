@@ -31,9 +31,9 @@ class GmailService:
         )
         self.service = build('gmail', 'v1', credentials=self.creds)
 
-    def fetch_emails(self, query=''):
+    def fetch_emails(self, query='subject:("credit" OR "debit") -("login" OR "signin" OR "password")'):
         """
-        THE FIX: Fetches all messages within conversation threads matching the query.
+        Fetches all messages within conversation threads matching the query.
         This is more robust and prevents missing 'stacked' emails.
         """
         all_messages = []
@@ -41,7 +41,7 @@ class GmailService:
             # First, get all threads that match the query
             threads_response = self.service.users().threads().list(userId='me', q=query).execute()
             threads = threads_response.get('threads', [])
-            
+
             for thread_info in threads:
                 # For each thread, get all of its messages
                 thread_details = self.service.users().threads().get(userId='me', id=thread_info['id']).execute()
@@ -52,7 +52,7 @@ class GmailService:
 
             logger.info(f"Found {len(all_messages)} messages across {len(threads)} threads.")
             return all_messages
-            
+
         except HttpError as error:
             logger.error(f"An HTTP error occurred while fetching email threads: {error}")
             return []
