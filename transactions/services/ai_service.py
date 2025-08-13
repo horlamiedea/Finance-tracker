@@ -101,6 +101,47 @@ class AIService:
             logger.error(f"An unexpected error occurred with Gemini client: {e}")
             return None
 
+    def _recover_with_gemini(self, text_block: str) -> Optional[Dict[str, Any]]:
+        """
+        Attempts to recover missing data using Google Gemini as a fallback.
+        """
+        if not GEMINI_CLIENT:
+            logger.warning("Google Gemini client not available for data recovery.")
+            return None
+
+        prompt = f"""
+You are a data recovery specialist. You will be given a block of messy text extracted from a financial email. Your task is to find and extract the following specific details from this text.
+
+**CRITICAL RULES for Transaction Type:**
+- A 'debit' means money is LEAVING the account. Keywords: Debit transaction, OUTWARD TRANSFER.
+- A 'credit' means money is ENTERING the account. Keywords: Credit transaction, INWARD TRANSFER.
+
+**Data to Extract:**
+1.  `transaction_type`: "debit" or "credit".
+2.  `date`: The full date and time of the transaction.
+3.  `narration`: The transaction description or narrative.
+4.  `amount`: The numerical amount of the transaction.
+5.  `account_balance`: The available balance after the transaction.
+
+Here is the messy text block:
+---
+{text_block}
+---
+
+Respond ONLY with a valid JSON object containing the keys you were able to find. If a key cannot be found, its value should be null.
+"""
+        try:
+            logger.info("Attempting data recovery with Gemini...")
+            response = GEMINI_CLIENT.generate_content(prompt)
+            cleaned_response = response.text.strip().replace("```json", "").replace("```", "").strip()
+            return json.loads(cleaned_response)
+        except (GoogleAPIError, ValueError) as e:
+            logger.error(f"Google Gemini API error or JSON parsing failed during data recovery: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"An unexpected error occurred with Gemini client during data recovery: {e}")
+            return None
+
 
     def extract_transaction_from_email(self, email_body: str) -> Optional[Dict[str, Any]]:
         """
@@ -308,5 +349,5 @@ Respond ONLY with a valid JSON object containing the keys you were able to find.
             )
             return json.loads(response.choices[0].message.content)
         except Exception as e:
-            logger.error(f"AI data recovery failed: {e}")
+            logger.error(f"An unexpected error occurred with Gemini client: {e}")
             return None
