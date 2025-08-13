@@ -642,3 +642,49 @@ def reprocess_failed_emails_task(user_id):
         process_raw_email_task.delay(raw_email.id)
 
     return f"Initiated reprocessing for {count} failed emails."
+
+from .pdf_generate import PDFReportGenerator
+from django.core.mail import EmailMessage
+from django.utils import timezone
+@shared_task
+def generate_and_email_report_task(user_id, start_date_iso=None, end_date_iso=None):
+    """
+    Celery task to generate a PDF financial report and email it to the user.
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return "User not found."
+
+    start_date = datetime.fromisoformat(start_date_iso).date() if start_date_iso else None
+    end_date = datetime.fromisoformat(end_date_iso).date() if end_date_iso else None
+    report_generator = PDFReportGenerator(user=user, start_date=start_date, end_date=end_date)
+    pdf_buffer = report_generator.generate()
+    
+    start_str = start_date.strftime("%Y-%m-%d") if start_date else "start"
+    end_str = end_date.strftime("%Y-%m-%d") if end_date else timezone.now().strftime("%Y-%m-%d")
+    filename = f"Financial_Report_{start_str}_to_{end_str}.pdf"
+
+    # 2. Create the email
+    subject = f"Your Financial Report for {start_str} to {end_str}"
+    body = (
+        "Hello,\n\n"
+        "Please find your requested financial report attached.\n\n"
+        "Thank you for using our service.\n\n"
+        "Regards,\n"
+        "The Castellum Team"
+    )
+    
+    email = EmailMessage(
+        subject=subject,
+        body=body,
+        from_email="Financial Tracker <noreply@mycastellum.com>",
+        to=[user.email],
+    )
+
+    email.attach(filename, pdf_buffer.getvalue(), 'application/pdf')
+
+    email.send()
+    
+    return f"Report successfully sent to {user.email}"
+

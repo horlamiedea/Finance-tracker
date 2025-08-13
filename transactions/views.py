@@ -22,6 +22,7 @@ from django.http import HttpResponse
 from django.db import IntegrityError
 from django.db.models import F
 from django.db.models.functions import TruncMonth, TruncDay
+import jwt
 
 
 # PDF and Charting Libraries
@@ -56,6 +57,16 @@ class AuthorizeGmailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        expiration = datetime.utcnow() + timedelta(minutes=10)
+        state_token = jwt.encode(
+            {
+                "user_id": request.user.id,
+                "exp": expiration
+            },
+            settings.SECRET_KEY,
+            algorithm="HS256"
+        )
+
         flow = Flow.from_client_config(
             client_config={
                 "web": {
@@ -69,18 +80,38 @@ class AuthorizeGmailView(APIView):
             scopes=['https://www.googleapis.com/auth/gmail.readonly'],
             redirect_uri=settings.GMAIL_REDIRECT_URI
         )
-        authorization_url, state = flow.authorization_url(
+
+        authorization_url, _ = flow.authorization_url(
             access_type='offline',
             include_granted_scopes='true',
-            prompt='consent'
+            prompt='consent',
+            state=state_token
         )
-        request.session['oauth_state'] = state
-        print(f"Authorization URL: {authorization_url}")  # Debugging line
+        
+        print(f"Authorization URL: {authorization_url}")
         return redirect(authorization_url)
 
 class OAuth2CallbackView(APIView):
+    permission_classes = [AllowAny]
+
     def get(self, request):
-        state = request.session.get('oauth_state')
+        state_token = request.query_params.get('state')
+
+        if not state_token:
+            return Response({"error": "State token is missing."}, status=400)
+        try:
+            payload = jwt.decode(
+                state_token, 
+                settings.SECRET_KEY, 
+                algorithms=["HS256"]
+            )
+            user_id = payload['user_id']
+            user = User.objects.get(id=user_id)
+
+        except jwt.ExpiredSignatureError:
+            return Response({"error": "Authorization link has expired. Please try again."}, status=400)
+        except (jwt.InvalidTokenError, User.DoesNotExist):
+            return Response({"error": "Invalid authorization token. Please try again."}, status=400)
         flow = Flow.from_client_config(
             client_config={
                 "web": {
@@ -92,23 +123,25 @@ class OAuth2CallbackView(APIView):
                 }
             },
             scopes=['https://www.googleapis.com/auth/gmail.readonly'],
-            state=state,
+            state=state_token, # <-- Pass the original state token here
             redirect_uri=settings.GMAIL_REDIRECT_URI
         )
-        flow.fetch_token(authorization_response=request.build_absolute_uri())
-        
+
+        try:
+            flow.fetch_token(authorization_response=request.build_absolute_uri())
+        except Exception as e:
+            print(f"Error fetching token: {e}")
+            return Response({"error": "Failed to fetch authorization token from Google."}, status=400)
+
         credentials = flow.credentials
-        # NOTE: In a real app, you'd link credentials to the logged-in user.
-        # This part requires user session management which is assumed to be in place.
-        if request.user.is_authenticated:
-            user = request.user
-            user.gmail_token = credentials.token
+        
+        user.gmail_token = credentials.token
+        if credentials.refresh_token:
             user.gmail_refresh_token = credentials.refresh_token
-            user.save()
-            return Response({"detail": "Google authorization successful."})
-        return Response({"detail": "User not authenticated during callback."}, status=400)
+        user.save()
 
-
+        # The HTML response to close the window is still a good idea
+        return HttpResponse("<html><body><h1>Authentication Successful!</h1><p>You can now close this page.</p><script>window.close();</script></body></html>")
 
 
 
@@ -282,7 +315,36 @@ class BudgetViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user)
 
 
+class EmailReportView(APIView):
+    """
+    Handles the request to email a financial report as a PDF attachment.
+    """
+    permission_classes = [IsAuthenticated]
 
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        if not user.email:
+            return Response(
+                {"error": "Cannot send report. Please add an email address to your profile first."},
+                status=400 # Bad Request
+            )
+
+        start_date_str = request.data.get('start_date')
+        end_date_str = request.data.get('end_date')
+
+        start_date = parse_date(start_date_str) if start_date_str else None
+        end_date = parse_date(end_date_str) if end_date_str else None
+
+        generate_and_email_report_task.delay(
+            user.id,
+            start_date.isoformat() if start_date else None,
+            end_date.isoformat() if end_date else None
+        )
+
+        # 4. Return an immediate success response to the user
+        return Response({
+            "message": f"Your financial report is being generated and will be sent to {user.email} shortly."
+        })
 
 class PDFReportView(APIView):
     """

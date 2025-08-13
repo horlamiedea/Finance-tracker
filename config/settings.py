@@ -184,3 +184,25 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 GMAIL_REDIRECT_URI = os.getenv('GMAIL_REDIRECT_URI')
 # Ensure the environment variables are set
+
+EMAIL_HOST = 'smtp.sendgrid.net'
+EMAIL_BACKEND = "sgbackend.SendGridBackend"
+EMAIL_PORT = 587
+EMAIL_USE_SSL = True
+SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER")
+DEFAULT_FROM_EMAIL = "Castellum <noreply@mycastellum.com>"
+EMAIL_HOST_PASSWORD = SENDGRID_API_KEY
+SERVER_MAIL = DEFAULT_FROM_EMAIL
+
+SESSION_COOKIE_SAME_SITE = 'Lax'
+
+
+
+# # Ensure cookies are only sent over HTTPS
+# SESSION_COOKIE_SECURE = True
+# CSRF_COOKIE_SECURE = True
+
+# # 'None' is most compatible for cross-site API/iframe usage, but requires `SESSION_COOKIE_SECURE = True`.
+# # 'Lax' is also a very good and secure default.
+# SESSION_COOKIE_SAME_SITE = 'None' 
