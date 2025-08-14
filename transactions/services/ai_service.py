@@ -5,6 +5,8 @@ from typing import Optional, Dict, Any
 
 from bs4 import BeautifulSoup
 from openai import OpenAI, APIError
+from openai import AzureOpenAI
+import time
 from google.generativeai import GenerativeModel, configure as configure_google_ai
 from google.api_core.exceptions import GoogleAPIError
 from typing import Optional, Dict, Any, List
@@ -18,6 +20,16 @@ try:
 except Exception as e:
     OPENAI_CLIENT = None
     logger.error(f"Failed to initialize OpenAI client: {e}")
+
+try:
+    AZURE_OPENAI_CLIENT = AzureOpenAI(
+        api_version="2024-12-01-preview",
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", "https://aquilla.openai.azure.com/"),
+        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+    )
+except Exception as e:
+    AZURE_OPENAI_CLIENT = None
+    logger.error(f"Failed to initialize Azure OpenAI client: {e}")
 
 try:
     configure_google_ai(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -80,6 +92,30 @@ class AIService:
         except Exception as e:
             logger.error(f"An unexpected error occurred with OpenAI client: {e}")
             raise
+    
+    def _parse_with_azure_openai(self, text_content: str) -> Optional[Dict[str, Any]]:
+        """Attempts to parse transaction data using Azure OpenAI GPT-4.1 as a third failover."""
+        if not AZURE_OPENAI_CLIENT:
+            logger.warning("Azure OpenAI client not available.")
+            return None
+        logger.info("Fallback: Attempting to parse with Azure OpenAI GPT-4.1...")
+        try:
+            response = AZURE_OPENAI_CLIENT.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": self._get_extraction_prompt()},
+                    {"role": "user", "content": text_content}
+                ],
+                max_completion_tokens=13107,
+                temperature=1.0,
+                top_p=1.0,
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
+                model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
+            )
+            return json.loads(response.choices[0].message.content)
+        except Exception as e:
+            logger.error(f"Azure OpenAI error: {e}")
+            return None
 
     def _parse_with_gemini(self, text_content: str) -> Optional[Dict[str, Any]]:
         """Attempts to parse transaction data using Google's Gemini as a fallback."""
@@ -142,11 +178,57 @@ Respond ONLY with a valid JSON object containing the keys you were able to find.
             logger.error(f"An unexpected error occurred with Gemini client during data recovery: {e}")
             return None
 
+    def _recover_with_azure_openai(self, text_block: str) -> Optional[Dict[str, Any]]:
+        """
+        Attempts to recover missing data using Azure OpenAI as a fallback.
+        """
+        if not AZURE_OPENAI_CLIENT:
+            logger.warning("Azure OpenAI client not available for data recovery.")
+            return None
+
+        prompt = f"""
+You are a data recovery specialist. You will be given a block of messy text extracted from a financial email. Your task is to find and extract the following specific details from this text.
+
+**CRITICAL RULES for Transaction Type:**
+- A 'debit' means money is LEAVING the account. Keywords: Debit transaction, OUTWARD TRANSFER.
+- A 'credit' means money is ENTERING the account. Keywords: Credit transaction, INWARD TRANSFER.
+
+**Data to Extract:**
+1.  `transaction_type`: "debit" or "credit".
+2.  `date`: The full date and time of the transaction.
+3.  `narration`: The transaction description or narrative.
+4.  `amount`: The numerical amount of the transaction.
+5.  `account_balance`: The available balance after the transaction.
+
+Here is the messy text block:
+---
+{text_block}
+---
+
+Respond ONLY with a valid JSON object containing the keys you were able to find. If a key cannot be found, its value should be null.
+"""
+        try:
+            logger.info("Attempting data recovery with Azure OpenAI...")
+            response = AZURE_OPENAI_CLIENT.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                max_completion_tokens=13107,
+                temperature=1.0,
+                top_p=1.0,
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
+                model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
+            )
+            cleaned_response = response.choices[0].message.content.strip().replace("```json", "").replace("```", "").strip()
+            return json.loads(cleaned_response)
+        except Exception as e:
+            logger.error(f"Azure OpenAI error or JSON parsing failed during data recovery: {e}")
+            return None
+
 
     def extract_transaction_from_email(self, email_body: str) -> Optional[Dict[str, Any]]:
         """
         Parses raw email text to extract transaction details using a primary AI
-        with a fallback to a secondary AI.
+        with a fallback to a secondary AI, and a third fallback to Azure OpenAI.
         """
         soup = BeautifulSoup(email_body, 'html.parser')
         clean_text = ' '.join(soup.stripped_strings)
@@ -155,12 +237,13 @@ Respond ONLY with a valid JSON object containing the keys you were able to find.
         if len(clean_text) < 40:
             logger.info("Skipping email processing: content too short.")
             return None
-
         try:
-            parsed_data = self._parse_with_openai(clean_text)
+            parsed_data = self._parse_with_azure_openai(clean_text)
         except Exception:
-            parsed_data = self._parse_with_gemini(clean_text)
-
+            try:
+                parsed_data = self._parse_with_gemini(clean_text)
+            except Exception:
+                parsed_data = self._parse_with_openai(clean_text)
     
     def _get_categorization_prompt(self, narration: str, categories: List[str], examples: List[Dict]) -> str:
         """Generates a few-shot prompt for accurate categorization."""
@@ -209,6 +292,30 @@ Respond ONLY with the name of the category from the list. If no category is a go
             logger.error(f"Unexpected OpenAI error during categorization: {e}")
             raise
 
+    def _categorize_with_azure_openai(self, narration: str, categories: List[str], examples: List[Dict]) -> Optional[str]:
+        """Internal method to categorize using Azure OpenAI."""
+        if not AZURE_OPENAI_CLIENT:
+            logger.warning("Azure OpenAI client not available for categorization.")
+            return None
+        prompt = self._get_categorization_prompt(narration, categories, examples)
+        try:
+            response = AZURE_OPENAI_CLIENT.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=1.0,
+                top_p=1.0,
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
+                max_completion_tokens=13107,
+                model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
+            )
+            category = response.choices[0].message.content.strip().strip('"')
+            if category in categories:
+                return category
+            return "Unknown"
+        except Exception as e:
+            logger.error(f"Azure OpenAI error during categorization: {e}")
+            return None
+
     def _categorize_with_gemini(self, narration: str, categories: List[str], examples: List[Dict]) -> Optional[str]:
         """Internal method to categorize using Gemini."""
         if not GEMINI_CLIENT:
@@ -231,7 +338,7 @@ Respond ONLY with the name of the category from the list. If no category is a go
 
     def categorize_transaction(self, narration: str, categories: List[str], examples: List[Dict]) -> str:
         """
-        Categorizes a transaction using a primary AI with a fallback.
+        Categorizes a transaction using a primary AI with a fallback, and a third fallback to Azure OpenAI.
         
         Args:
             narration: The narration of the transaction to categorize.
@@ -241,10 +348,14 @@ Respond ONLY with the name of the category from the list. If no category is a go
         Returns:
             The name of the best-fit category, or "Unknown".
         """
+        # Failover: OpenAI → Gemini → Azure OpenAI
         try:
             category = self._categorize_with_openai(narration, categories, examples)
         except Exception:
-            category = self._categorize_with_gemini(narration, categories, examples)
+            try:
+                category = self._categorize_with_gemini(narration, categories, examples)
+            except Exception:
+                category = self._categorize_with_azure_openai(narration, categories, examples)
             
         return category or "Unknown"
     
@@ -336,6 +447,7 @@ Here is the messy text block:
 
 Respond ONLY with a valid JSON object containing the keys you were able to find. If a key cannot be found, its value should be null.
 """
+        # Try OpenAI → Azure OpenAI
         try:
             logger.info("Attempting data recovery with OpenAI...")
             if not OPENAI_CLIENT:
@@ -349,5 +461,25 @@ Respond ONLY with a valid JSON object containing the keys you were able to find.
             )
             return json.loads(response.choices[0].message.content)
         except Exception as e:
-            logger.error(f"An unexpected error occurred with Gemini client: {e}")
-            return None
+            error_str = str(e)
+            if "429" in error_str or "Too Many Requests" in error_str:
+                logger.warning("OpenAI rate limit hit (429). Waiting 30 seconds before retrying...")
+                time.sleep(30)
+            else:
+                logger.error(f"OpenAI failed or another error occurred; falling back to Azure OpenAI: {e}")
+            # Fallback to Azure OpenAI if OpenAI fails or after waiting for rate limit
+            try:
+                response = AZURE_OPENAI_CLIENT.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    max_completion_tokens=13107,
+                    temperature=1.0,
+                    top_p=1.0,
+                    frequency_penalty=0.0,
+                    presence_penalty=0.0,
+                    model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
+                )
+                cleaned_response = response.choices[0].message.content.strip().replace("```json", "").replace("```", "").strip()
+                return json.loads(cleaned_response)
+            except Exception as azure_e:
+                logger.error(f"Azure OpenAI error or JSON parsing failed during data recovery: {azure_e}")
+                return None
