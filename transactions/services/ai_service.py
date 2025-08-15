@@ -24,7 +24,7 @@ except Exception as e:
 try:
     AZURE_OPENAI_CLIENT = AzureOpenAI(
         api_version="2024-12-01-preview",
-        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", "https://aquilla.openai.azure.com/"),
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", "https://aquil-mecl0098-eastus2.cognitiveservices.azure.com/openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview"),
         api_key=os.getenv("AZURE_OPENAI_API_KEY"),
     )
 except Exception as e:
@@ -33,7 +33,7 @@ except Exception as e:
 
 try:
     configure_google_ai(api_key=os.getenv("GOOGLE_API_KEY"))
-    GEMINI_CLIENT = GenerativeModel("gemini-2.5-flash-latest")
+    GEMINI_CLIENT = GenerativeModel("gemini-2.5-flash")
 except Exception as e:
     GEMINI_CLIENT = None
     logger.error(f"Failed to initialize Google Gemini client: {e}")
@@ -464,7 +464,7 @@ Respond ONLY with a valid JSON object containing the keys you were able to find.
             error_str = str(e)
             if "429" in error_str or "Too Many Requests" in error_str:
                 logger.warning("OpenAI rate limit hit (429). Waiting 30 seconds before retrying...")
-                time.sleep(30)
+                time.sleep(10)
             else:
                 logger.error(f"OpenAI failed or another error occurred; falling back to Azure OpenAI: {e}")
             # Fallback to Azure OpenAI if OpenAI fails or after waiting for rate limit

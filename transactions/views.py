@@ -23,6 +23,7 @@ from django.db import IntegrityError
 from django.db.models import F
 from django.db.models.functions import TruncMonth, TruncDay
 import jwt
+from django.core.management import call_command
 
 
 # PDF and Charting Libraries
@@ -382,3 +383,14 @@ class ReprocessFailedEmailsView(APIView):
         user = request.user
         reprocess_failed_emails_task.delay(user.id)
         return Response({"message": "A task has been started to reprocess any failed emails. Please check your transactions again in a few minutes."})
+
+
+class CleanTransactionNarrationsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            call_command('clean_narrations')
+            return Response({"message": "Transaction narrations have been successfully cleaned."})
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)

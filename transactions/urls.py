@@ -20,6 +20,7 @@ urlpatterns = [
     path('report/download/', PDFReportView.as_view(), name='download-pdf-report'),
     path('report/email/', EmailReportView.as_view(), name='email-pdf-report'),
     path('reprocess-failed/', ReprocessFailedEmailsView.as_view(), name='reprocess-failed-emails'),
+    path('clean-narrations/', CleanTransactionNarrationsView.as_view(), name='clean-narrations'),
 
     path('budget/', include(router.urls)),
 ]

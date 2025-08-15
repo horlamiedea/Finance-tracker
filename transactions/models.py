@@ -33,6 +33,7 @@ class Transaction(models.Model):
     account_balance = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     receipt_items = models.JSONField(null=True, blank=True) # For receipt uploads
     is_manually_categorized = models.BooleanField(default=False)
+    narration_cleaned = models.BooleanField(default=False)
 
     class Meta:
         # This uniqueness constraint is key to preventing duplicates
