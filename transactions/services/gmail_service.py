@@ -31,7 +31,7 @@ class GmailService:
         )
         self.service = build('gmail', 'v1', credentials=self.creds)
 
-    def fetch_emails(self, query='subject:("credit" OR "debit") -("login" OR "signin" OR "password")'):
+    def fetch_emails(self, query='subject:("credit" OR "debit" OR "Transaction Notification") -("login" OR "signin" OR "password")'):
         """
         Fetches all messages within conversation threads matching the query.
         This is more robust and prevents missing 'stacked' emails.
@@ -65,27 +65,44 @@ class GmailService:
             message = self.service.users().messages().get(userId='me', id=msg_id, format='full').execute()
             payload = message.get('payload', {})
             headers = payload.get('headers', [])
-            parts = payload.get('parts', [])
-            data = None
+            
+            part_to_decode = None
 
-            if parts:
+            def find_part(parts):
+                html_part = None
+                plain_part = None
                 for part in parts:
-                    if part.get('mimeType') == 'text/html' and part.get('body') and part['body'].get('data'):
-                        data = part['body']['data']
+                    if part.get('mimeType') == 'text/html':
+                        html_part = part
                         break
-                    elif part.get('parts'):
-                        for subpart in part['parts']:
-                            if subpart.get('mimeType') == 'text/html' and subpart.get('body') and subpart['body'].get('data'):
-                                data = subpart['body']['data']
-                                break
-                        if data:
-                            break
-            elif payload.get('body'):
-                data = payload['body'].get('data')
+                    if part.get('mimeType') == 'text/plain':
+                        plain_part = part
+                    if part.get('parts'):
+                        found_part = find_part(part['parts'])
+                        if found_part and found_part.get('mimeType') == 'text/html':
+                            return found_part
+                        elif found_part and not plain_part:
+                            plain_part = found_part
+                return html_part or plain_part
+
+            if payload.get('parts'):
+                part_to_decode = find_part(payload['parts'])
+            
+            if not part_to_decode and payload.get('body'):
+                part_to_decode = payload
 
             email_text = ''
-            if data:
-                email_text = base64.urlsafe_b64decode(data).decode(errors='ignore')
+            if part_to_decode and part_to_decode.get('body') and part_to_decode['body'].get('data'):
+                data = part_to_decode['body']['data']
+                part_headers = part_to_decode.get('headers', [])
+                decoded_data = base64.urlsafe_b64decode(data)
+                content_encoding = next((h['value'] for h in part_headers if h['name'].lower() == 'content-transfer-encoding'), '')
+                
+                if 'quoted-printable' in content_encoding.lower():
+                    import quopri
+                    email_text = quopri.decodestring(decoded_data).decode(errors='ignore')
+                else:
+                    email_text = decoded_data.decode(errors='ignore')
 
             # Extract sent date from headers and make it timezone-aware
             sent_date_str = next((h['value'] for h in headers if h['name'].lower() == 'date'), None)
@@ -121,6 +138,7 @@ class GmailService:
                 'uba': 'UBA Bank',
                 'zenithbank': 'Zenith Bank',
                 'moniepoint': 'Moniepoint',  # Added for your example
+                'kuda': 'Kuda Bank',
             }
             bank_name = bank_name_map.get(domain)
             if bank_name:
@@ -220,6 +238,23 @@ class GmailService:
                 if note_row:
                     transaction_data['narration'] = note_row.find_next_sibling('td').get_text(strip=True)
 
+            elif bank_name == 'Kuda Bank':
+                email_body = soup.get_text()
+                sent_match = re.search(r'You just sent\s+(?:NGN|₦)\s*([\d,]+\.\d{2})', email_body)
+                received_match = re.search(r'You just received\s+(?:NGN|₦)\s*([\d,]+\.\d{2})', email_body)
+
+                if sent_match:
+                    transaction_data['amount'] = sent_match.group(1).replace(',', '')
+                    transaction_data['transaction_type'] = 'debit'
+                    narration_match = re.search(r'to\s+(.*?)\s*\.', email_body)
+                    if narration_match:
+                        transaction_data['narration'] = narration_match.group(1).strip()
+                elif received_match:
+                    transaction_data['amount'] = received_match.group(1).replace(',', '')
+                    transaction_data['transaction_type'] = 'credit'
+                    narration_match = re.search(r'from\s+(.*?)\s*\.', email_body)
+                    if narration_match:
+                        transaction_data['narration'] = narration_match.group(1).strip()
             else:
                 amount_match = re.search(r'(?:NGN|₦)\s*([\d,]+\.\d{2})', soup.get_text())
                 if amount_match:

@@ -187,13 +187,16 @@ def process_raw_email_task(raw_email_id: int):
 
         trans_date = parse_date_with_fallback(date_str)
         if not trans_date:
-            raw_email.parsed = True
-            raw_email.manual_review_needed = True
-            raw_email.parsing_method = 'all_methods_failed'
-            raw_email.transaction_data = parsed_data
-            raw_email.save()
-            logger.critical(f"CRITICAL: Could not parse date for RawEmail ID {raw_email.id}. Marked for manual review.")
-            return
+            if raw_email.sent_date:
+                trans_date = raw_email.sent_date
+            else:
+                raw_email.parsed = True
+                raw_email.manual_review_needed = True
+                raw_email.parsing_method = 'all_methods_failed'
+                raw_email.transaction_data = parsed_data
+                raw_email.save()
+                logger.critical(f"CRITICAL: Could not parse date for RawEmail ID {raw_email.id}. Marked for manual review.")
+                return
 
         # Ensure both dates are timezone-aware or naive for comparison
         if raw_email.sent_date:
@@ -428,7 +431,7 @@ def sync_user_transactions_task(user_id, start_date_iso, end_date_iso):
     bank_domains = [
         "providusbank.com", "moniepoint.com", "opay-nigeria.com",
         "uba.com", "gtbank.com", "zenithbank.com", "accessbankplc.com",
-        "firstbanknigeria.com", "wemabank.com", "alat.ng", "kudabank.com"
+        "firstbanknigeria.com", "wemabank.com", "alat.ng", "kuda.com"
     ]
     from_query = " OR ".join([f"from:{domain}" for domain in bank_domains])
     query = f"after:{start_date_iso.split('T')[0]} before:{end_date_iso.split('T')[0]} {{ {from_query} }}"
@@ -687,4 +690,3 @@ def generate_and_email_report_task(user_id, start_date_iso=None, end_date_iso=No
     email.send()
     
     return f"Report successfully sent to {user.email}"
-

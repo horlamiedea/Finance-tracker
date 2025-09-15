@@ -107,9 +107,13 @@ WSGI_APPLICATION = "config.wsgi.application"
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DB_NAME'),
+        'USER': os.getenv('DB_USER'),
+        'PASSWORD': os.getenv('DB_PASSWORD'),
+        'HOST': os.getenv('DB_HOST'),
+        'PORT': os.getenv('DB_PORT'),
     }
 }
 
@@ -205,4 +209,4 @@ SESSION_COOKIE_SAME_SITE = 'Lax'
 
 # # 'None' is most compatible for cross-site API/iframe usage, but requires `SESSION_COOKIE_SECURE = True`.
 # # 'Lax' is also a very good and secure default.
-# SESSION_COOKIE_SAME_SITE = 'None' 
+# SESSION_COOKIE_SAME_SITE = 'None'
