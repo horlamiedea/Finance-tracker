@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'users',
     'transactions',
     'receipts',
+    'budgeting',
 ]
 
 MIDDLEWARE = [
@@ -171,6 +172,10 @@ CELERY_BEAT_SCHEDULE = {
     'reconcile_new_receipts': {
         'task': 'receipts.tasks.reconcile_unprocessed_receipts',
         'schedule': 3600,
+    },
+    'update_spending_frequency': {
+        'task': 'budgeting.tasks.update_spending_frequency',
+        'schedule': 345600,  # Every 96 hours
     },
 }
 
