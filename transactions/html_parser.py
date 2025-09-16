@@ -62,7 +62,7 @@ class HTMLParserService:
             local_scope = {
                 'soup': soup, 
                 're': __import__('re'), 
-                'date_parser': __import__('dateutil.parser')
+                'date_parser': __import__('dateutil.parser').parser
             }
             exec_scope = {}
 
