@@ -4,29 +4,31 @@ from django.contrib import admin
 from .models import *
 
 
-admin.site.register(Transaction)
+@admin.register(Transaction)
 class TransactionAdmin(admin.ModelAdmin):
     """Admin interface for Transaction model."""
-    search_fields = ('user__username', 'transaction_type')
+    search_fields = ('user__username', 'transaction_type', 'narration', 'bank_name')
+    list_display = ('user', 'amount', 'date', 'transaction_type', 'narration', 'category', 'bank_name')
+    list_filter = ('transaction_type', 'category', 'bank_name', 'is_manually_categorized')
     ordering = ('-date',)
     fieldsets = (
-        (None, {'fields': ('user', 'amount', 'date', 'transaction_type')}),
+        (None, {'fields': ('user', 'amount', 'date', 'transaction_type', 'narration')}),
+        ('Details', {'fields': ('category', 'bank_name', 'account_balance', 'is_manually_categorized')}),
     )
-    add_fieldsets = fieldsets
     readonly_fields = ('date',)
-    list_display = ('user', 'amount', 'date', 'transaction_type')
 
-admin.site.register(RawEmail)
+@admin.register(RawEmail)
 class RawEmailAdmin(admin.ModelAdmin):
     """Admin interface for RawEmail model."""
-    search_fields = ('user__username', 'email_id')
+    search_fields = ('user__username', 'email_id', 'bank_name')
+    list_display = ('user', 'email_id', 'bank_name', 'sent_date', 'parsed', 'parsing_method', 'manual_review_needed')
+    list_filter = ('parsed', 'manual_review_needed', 'parsing_method', 'bank_name')
     ordering = ('-fetched_at',)
     fieldsets = (
-        (None, {'fields': ('user', 'email_id', 'raw_text', 'fetched_at')}),
-        ('Parsing Info', {'fields': ('parsed', 'parsing_method', 'transaction_data')}),
+        (None, {'fields': ('user', 'email_id', 'raw_text', 'fetched_at', 'bank_name', 'sent_date')}),
+        ('Parsing Info', {'fields': ('parsed', 'parsing_method', 'transaction_data', 'manual_review_needed')}),
     )
-    add_fieldsets = fieldsets
-    readonly_fields = ('fetched_at',)
+    readonly_fields = ('fetched_at', 'transaction_data')
 
 
 admin.site.register(TransactionCategory)

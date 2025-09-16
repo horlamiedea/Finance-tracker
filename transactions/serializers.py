@@ -21,20 +21,13 @@ class ReceiptSerializer(serializers.ModelSerializer):
         return None
 
 class TransactionSerializer(serializers.ModelSerializer):
-    receipt = serializers.SerializerMethodField()
+    receipt = ReceiptSerializer(read_only=True)
     category = TransactionCategorySerializer(read_only=True)
 
     class Meta:
         model = Transaction
         fields = ['id', 'transaction_type', 'amount', 'date', 'narration', 
                   'account_balance', 'receipt', 'category']
-
-    def get_receipt(self, obj):
-        try:
-            receipt = obj.receipt
-            return ReceiptSerializer(receipt, context=self.context).data
-        except Receipt.DoesNotExist:
-            return None
 
 
 class TransactionUpdateSerializer(serializers.ModelSerializer):

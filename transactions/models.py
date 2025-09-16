@@ -92,11 +92,12 @@ class RawEmail(models.Model):
         max_length=50,
         choices=[
             ('none', 'None'),
-            ('ai_success', 'AI Success'),
-            ('html_parser_success', 'HTML Parser Success'),
-            ('ai_failed', 'AI Failed to Parse'),
+            ('dynamic_html_parser_success', 'Dynamic HTML Parser Success'),
+            ('ai_generated_parser_success', 'AI Generated Parser Success'),
+            ('ai_fallback_success', 'AI Fallback Success'),
+            ('regex_fallback_success', 'Regex Fallback Success'),
+            ('all_methods_failed', 'All Methods Failed'),
             ('creation_failed_data_error', 'Transaction Creation Failed (Data Error)'),
-            ('creation_failed_unknown', 'Transaction Creation Failed (Unknown Error)'),
         ],
         default='none'
     )

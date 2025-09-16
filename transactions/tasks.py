@@ -10,7 +10,6 @@ from google.auth.exceptions import RefreshError
 import os, re
 import pytz
 import difflib
-from openai import OpenAI
 from dateutil import parser as date_parser
 from .services.ai_service import AIService
 from django.conf import settings
@@ -24,7 +23,6 @@ from receipts.models import Receipt
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
-client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 def extract_decimal(value):
@@ -71,6 +69,12 @@ def process_raw_email_task(raw_email_id: int):
         return
 
     if raw_email.parsed:
+        return
+
+    # Quick check for login emails to avoid unnecessary processing
+    if "you have logged-in successfully" in raw_email.raw_text.lower():
+        logger.info(f"Detected and deleting login notification email (ID: {raw_email.id})")
+        raw_email.delete()
         return
 
     html_parser = HTMLParserService()
@@ -160,7 +164,8 @@ def process_raw_email_task(raw_email_id: int):
     narration_lower = (parsed_data.get('narration') or "").lower()
     non_transactional_keywords = [
         'log in confirmation', 'security alert', 'password reset', 'welcome back',
-        'failed transaction', 'insufficient funds', 'failed card transaction'
+        'failed transaction', 'insufficient funds', 'failed card transaction',
+        'you have logged-in successfully'
     ]
     if any(keyword in narration_lower for keyword in non_transactional_keywords) or parsed_data.get('transaction_type') is None:
         logger.info(f"Detected and deleting non-transactional email (ID: {raw_email.id})")
@@ -173,6 +178,8 @@ def process_raw_email_task(raw_email_id: int):
         account_balance = extract_decimal(parsed_data.get('account_balance'))
         date_str = parsed_data.get('date')
         trans_type = parsed_data.get('transaction_type')
+        if trans_type:
+            trans_type = trans_type.lower()
         narration = parsed_data.get('narration')
 
         if not all([amount, date_str, trans_type, narration]):
@@ -214,13 +221,13 @@ def process_raw_email_task(raw_email_id: int):
             if trans_date.tzinfo is None:
                 trans_date = trans_date.replace(tzinfo=pytz.UTC)
 
-        transaction, created = Transaction.objects.get_or_create(
+        transaction, created = Transaction.objects.update_or_create(
             user=raw_email.user,
             amount=amount,
             date=trans_date,
             transaction_type=trans_type,
-            narration=narration,
             defaults={
+                'narration': narration,
                 'bank_name': raw_email.bank_name,
                 'account_balance': account_balance,
             }
@@ -235,173 +242,13 @@ def process_raw_email_task(raw_email_id: int):
         if created:
             logger.info(f"Created transaction for RawEmail {raw_email.id} using {parsing_method_used}.")
         else:
-            logger.info(f"Transaction for RawEmail {raw_email.id} already exists.")
+            logger.info(f"Updated transaction for RawEmail {raw_email.id} using {parsing_method_used}.")
 
     except Exception as e:
         logger.error(f"Error for RawEmail {raw_email.id}. Error: {str(e)}, Data: {parsed_data}")
         raw_email.parsed = True
         raw_email.manual_review_needed = True
         raw_email.parsing_method = 'creation_failed_data_error'
-        raw_email.transaction_data = parsed_data
-        raw_email.save()
-
-    # Step 5: Data Recovery for Incomplete Parses
-    is_data_complete = all(parsed_data.get(key) for key in ['amount', 'date', 'transaction_type', 'narration'])
-    if not is_data_complete and parsed_data.get('narration'):
-        logger.warning(f"Initial parse for RawEmail {raw_email.id} is incomplete. Attempting data recovery...")
-        recovered_data = ai_service.recover_missing_data_from_text(parsed_data['narration'])
-        if recovered_data:
-            for key, value in recovered_data.items():
-                if not parsed_data.get(key) and value is not None:
-                    parsed_data[key] = value
-            logger.info(f"Successfully recovered data for RawEmail {raw_email.id}.")
-
-    # Step 6: Handle Non-Transactional Emails
-    narration_lower = (parsed_data.get('narration') or "").lower()
-    non_transactional_keywords = [
-        'log in confirmation', 'security alert', 'password reset', 'welcome back',
-        'failed transaction', 'insufficient funds', 'failed card transaction'
-    ]
-    if any(keyword in narration_lower for keyword in non_transactional_keywords) or parsed_data.get('transaction_type') is None:
-        logger.info(f"Detected and deleting non-transactional email (ID: {raw_email.id})")
-        raw_email.delete()
-        return
-
-    # Step 7: Final Validation and Transaction Creation
-    try:
-        amount = extract_decimal(parsed_data.get('amount'))
-        account_balance = extract_decimal(parsed_data.get('account_balance'))
-        date_str = parsed_data.get('date')
-        trans_type = parsed_data.get('transaction_type')
-        narration = parsed_data.get('narration')
-
-        if not all([amount, date_str, trans_type, narration]):
-            raise ValueError("Essential data (amount, date, type, or narration) is missing.")
-
-        trans_date = parse_date_with_fallback(date_str)
-        if not trans_date:
-            raise ValueError(f"Could not parse date: {date_str}")
-
-        # Ensure both dates are timezone-aware or naive for comparison
-        if raw_email.sent_date:
-            # Make both dates timezone-aware (UTC)
-            if trans_date.tzinfo is None:
-                trans_date = trans_date.replace(tzinfo=pytz.UTC)
-            if raw_email.sent_date.tzinfo is None:
-                raw_email.sent_date = raw_email.sent_date.replace(tzinfo=pytz.UTC)
-            # Validate date: if future relative to sent_date, use sent_date
-            if trans_date > raw_email.sent_date:
-                logger.warning(f"Parsed date {trans_date} is after sent date {raw_email.sent_date}. Using sent date.")
-                trans_date = raw_email.sent_date
-        else:
-            # If no sent_date, ensure trans_date is timezone-aware
-            if trans_date.tzinfo is None:
-                trans_date = trans_date.replace(tzinfo=pytz.UTC)
-
-        transaction, created = Transaction.objects.get_or_create(
-            user=raw_email.user,
-            amount=amount,
-            date=trans_date,
-            transaction_type=trans_type,
-            narration=narration,
-            defaults={
-                'bank_name': raw_email.bank_name,
-                'account_balance': account_balance,
-            }
-        )
-
-        raw_email.parsed = True
-        raw_email.parsing_method = parsing_method_used
-        raw_email.transaction_data = parsed_data
-        raw_email.save()
-
-        if created:
-            logger.info(f"Created transaction for RawEmail {raw_email.id} using {parsing_method_used}.")
-        else:
-            logger.info(f"Transaction for RawEmail {raw_email.id} already exists.")
-
-    except Exception as e:
-        logger.error(f"Error for RawEmail {raw_email.id}. Error: {str(e)}, Data: {parsed_data}")
-        raw_email.parsing_method = 'creation_failed_data_error'
-        raw_email.transaction_data = parsed_data
-        raw_email.save()
-
-
-@shared_task(max_retries=3, default_retry_delay=60)
-def process_email_with_ai(raw_email_id: int):
-    """
-    Takes a RawEmail ID, sends its content to the AI service for parsing,
-    and creates a Transaction record. Retries on failure.
-    This version includes robust error handling and status updates.
-    """
-    try:
-        raw_email = RawEmail.objects.get(id=raw_email_id)
-    except RawEmail.DoesNotExist:
-        logger.error(f"RawEmail with ID {raw_email_id} not found.")
-        return
-
-    if raw_email.parsed:
-        logger.info(f"RawEmail {raw_email.id} has already been parsed. Skipping.")
-        return
-
-    ai_service = AIService()
-    parsed_data = ai_service.extract_transaction_from_email(raw_email.raw_text)
-
-    if not parsed_data:
-        raw_email.parsed = True
-        raw_email.parsing_method = 'ai_failed'
-        raw_email.save()
-        logger.warning(f"AI service could not parse RawEmail ID {raw_email.id}")
-        return
-
-    # --- THE FIX: Defensive data validation ---
-    # Use .get() to avoid KeyErrors and check for essential data before proceeding.
-    amount_str = parsed_data.get('amount')
-    date_str = parsed_data.get('date')
-    trans_type = parsed_data.get('transaction_type')
-
-    if not all([amount_str, date_str, trans_type]):
-        raw_email.parsed = True
-        raw_email.parsing_method = 'ai_missing_data'
-        raw_email.transaction_data = parsed_data
-        raw_email.save()
-        logger.error(f"AI response for RawEmail {raw_email.id} was missing essential data (amount, date, or type). Data: {parsed_data}")
-        return
-
-    try:
-        amount = Decimal(str(amount_str))
-        trans_date = date_parser.parse(date_str)
-        
-        transaction, created = Transaction.objects.get_or_create(
-            user=raw_email.user,
-            amount=amount,
-            date=trans_date,
-            transaction_type=trans_type,
-            defaults={
-                'narration': parsed_data.get('narration', 'N/A'),
-                'bank_name': parsed_data.get('bank_name'),
-                'account_balance': Decimal(str(parsed_data.get('account_balance'))) if parsed_data.get('account_balance') else None,
-            }
-        )
-
-        if created:
-            logger.info(f"Successfully created transaction from RawEmail {raw_email.id}")
-        else:
-            logger.info(f"Transaction from RawEmail {raw_email.id} already exists.")
-
-        raw_email.parsed = True
-        raw_email.parsing_method = 'ai_success'
-        raw_email.transaction_data = parsed_data
-        raw_email.save()
-
-    except (InvalidOperation, ValueError, TypeError) as e:
-        logger.error(f"Data type conversion error for RawEmail {raw_email.id}. Error: {e}, Data: {parsed_data}")
-        raw_email.parsing_method = 'creation_failed_data_error'
-        raw_email.transaction_data = parsed_data
-        raw_email.save()
-    except Exception as e:
-        logger.error(f"An unexpected error occurred creating transaction for RawEmail {raw_email.id}. Error: {e}, Data: {parsed_data}")
-        raw_email.parsing_method = 'creation_failed_unknown'
         raw_email.transaction_data = parsed_data
         raw_email.save()
 

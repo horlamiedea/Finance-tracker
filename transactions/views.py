@@ -147,13 +147,21 @@ class OAuth2CallbackView(APIView):
 
 
 
+from rest_framework.pagination import PageNumberPagination
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 100
+    page_size_query_param = 'page_size'
+    max_page_size = 1000
+
 class TransactionListView(generics.ListAPIView):
     serializer_class = TransactionSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
         # Return transactions only for the authenticated user, ordered by date desc
-        return Transaction.objects.filter(user=self.request.user).order_by('-date')
+        return Transaction.objects.filter(user=self.request.user).select_related('receipt', 'category').order_by('-date')
 
 
 
