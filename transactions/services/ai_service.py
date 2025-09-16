@@ -254,6 +254,48 @@ Respond ONLY with a valid JSON object containing the keys you were able to find.
             logger.error(f"An unexpected error occurred with Gemini client during data recovery: {e}")
             return None
 
+    def extract_data_from_receipt(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """
+        Extracts transaction data from a receipt file (image or PDF) using Gemini.
+        """
+        if not GEMINI_CLIENTS:
+            logger.warning("No Google Gemini clients available for receipt processing.")
+            return None
+
+        client = GEMINI_CLIENTS[self.gemini_client_index]
+        logger.info(f"Attempting to extract data from receipt with Google Gemini (Key {self.gemini_client_index + 1})...")
+
+        try:
+            with open(file_path, "rb") as f:
+                image_data = f.read()
+
+            prompt = """
+You are an expert receipt data extraction API. You will be given an image or PDF of a receipt.
+Your task is to extract the following details and return them as a SINGLE, VALID JSON object.
+Do not include any text, markdown, or formatting before or after the JSON object.
+
+The required JSON keys are:
+- "total": The total amount of the transaction as a string (e.g., "300250.00").
+- "date": The date of the transaction in "YYYY-MM-DD" format.
+- "items": A list of items, where each item is a dictionary with "description" and "amount" keys.
+
+If you cannot find a specific piece of information, set its value to null.
+"""
+            
+            response = client.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_data}])
+            cleaned_response = response.text.strip().replace("```json", "").replace("```", "").strip()
+            return json.loads(cleaned_response)
+        except GoogleAPIError as e:
+            if "429" in str(e):
+                logger.warning(f"Gemini API rate limit hit for key {self.gemini_client_index + 1}. Rotating to next key.")
+                self.gemini_client_index = (self.gemini_client_index + 1) % len(GEMINI_CLIENTS)
+                return self.extract_data_from_receipt(file_path)
+            logger.error(f"Google Gemini API error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during receipt processing: {e}")
+            return None
+
     def generate_parser_function(self, email_html: str) -> Optional[str]:
         """
         Uses Gemini to write a Python function that can parse the given email HTML.

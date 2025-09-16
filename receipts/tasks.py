@@ -24,9 +24,9 @@ def process_receipt_upload(receipt_id: int):
         return f"Receipt {receipt_id} no longer exists."
     if receipt.transaction_id:
         return f"Receipt {receipt_id} already attached to Tx {receipt.transaction_id}; skipping."
-    ai = AIService(api_key=os.getenv("OPENAI_API_KEY"))
+    ai = AIService()
     try:
-        parsed = ai.categorize_expenses_from_image(receipt.uploaded_image.path)
+        parsed = ai.extract_data_from_receipt(receipt.uploaded_image.path)
     except Exception as e:
         return f"AI parse failed for receipt {receipt_id}: {e}"
     receipt.extracted_text = json.dumps(parsed)
