@@ -102,9 +102,14 @@ def process_raw_email_task(raw_email_id: int):
         if parsed_data:
             parsing_method_used = 'ai_fallback_success'
 
-    # Step 4: Final fallback to regex/subject line extraction
+    # Step 4: Final fallback to direct AI extraction with a direct prompt
     if not parsed_data:
-        # Try to extract transaction type from subject line as a last resort
+        parsed_data = ai_service.extract_transaction_from_email_with_direct_prompt(raw_email.raw_text)
+        if parsed_data:
+            parsing_method_used = 'ai_direct_prompt_fallback_success'
+
+    # Step 5: Final fallback to regex/subject line extraction
+    if not parsed_data:
         from bs4 import BeautifulSoup
         import re
         soup = BeautifulSoup(raw_email.raw_text, 'html.parser')
@@ -149,7 +154,7 @@ def process_raw_email_task(raw_email_id: int):
             "bank_name": raw_email.bank_name,
         }
 
-    # Step 5: Validate and Process the Data
+    # Step 6: Validate and Process the Data
     is_data_complete = all(parsed_data.get(key) for key in ['amount', 'date', 'transaction_type', 'narration'])
     if not is_data_complete and parsed_data.get('narration'):
         logger.warning(f"Initial parse for RawEmail {raw_email.id} is incomplete. Attempting data recovery...")
@@ -160,7 +165,7 @@ def process_raw_email_task(raw_email_id: int):
                     parsed_data[key] = value
             logger.info(f"Successfully recovered data for RawEmail {raw_email.id}.")
 
-    # Step 6: Handle Non-Transactional Emails
+    # Step 7: Handle Non-Transactional Emails
     narration_lower = (parsed_data.get('narration') or "").lower()
     non_transactional_keywords = [
         'log in confirmation', 'security alert', 'password reset', 'welcome back',

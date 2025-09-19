@@ -338,3 +338,58 @@ Respond ONLY with the complete, raw Python code for the function. Do not add com
         except Exception as e:
             logger.error(f"Gemini parser generation failed: {e}")
             return None
+
+    def extract_transaction_from_email_with_direct_prompt(self, email_body: str) -> Optional[Dict[str, Any]]:
+        """
+        Sends the entire email body to the AI and asks it to extract the transaction details
+        in a specific format. This is a fallback when other parsing methods fail.
+        """
+        soup = BeautifulSoup(email_body, 'html.parser')
+        clean_text = ' '.join(soup.stripped_strings)
+        clean_text = ' '.join(clean_text.split())
+
+        if len(clean_text) < 40:
+            logger.info("Skipping email processing: content too short.")
+            return None
+
+        prompt = f"""
+You are an expert financial data extraction API. You will be given the text content of a bank transaction email.
+Your task is to extract the following details and return them as a SINGLE, VALID JSON object.
+Do not include any text, markdown, or formatting before or after the JSON object.
+
+The required JSON keys are:
+- "transaction_type": Must be either "debit" or "credit".
+- "amount": The transaction amount as a string (e.g., "300250.00").
+- "date": The date of the transaction in any parseable format (e.g., "YYYY-MM-DD HH:MM:SS" or "Fri, Jun 27, 2025 at 9:10 PM").
+- "narration": The transaction narration.
+- "account_balance": The available account balance after the transaction, as a string. Use null if not available.
+- "bank_name": The name of the bank (e.g., "Providus Bank", "Moniepoint").
+
+Here is the email content:
+---
+{clean_text}
+---
+
+Respond ONLY with a valid JSON object containing the keys you were able to find. If a key cannot be found, its value should be null.
+"""
+        for i in range(len(GEMINI_CLIENTS) * 2):
+            try:
+                client = GEMINI_CLIENTS[self.gemini_client_index]
+                logger.info(f"Attempting direct AI extraction with Google Gemini (Key {self.gemini_client_index + 1}, Attempt {i + 1})...")
+                response = client.generate_content(prompt)
+                cleaned_response = response.text.strip().replace("```json", "").replace("```", "").strip()
+                return json.loads(cleaned_response)
+            except GoogleAPIError as e:
+                if "429" in str(e):
+                    logger.warning(f"Gemini API rate limit hit for key {self.gemini_client_index + 1}. Rotating to next key.")
+                    self.gemini_client_index = (self.gemini_client_index + 1) % len(GEMINI_CLIENTS)
+                    time.sleep(5)
+                    continue
+                logger.error(f"Google Gemini API error for key {self.gemini_client_index + 1}: {e}")
+                self.gemini_client_index = (self.gemini_client_index + 1) % len(GEMINI_CLIENTS)
+            except (ValueError, json.JSONDecodeError) as e:
+                logger.error(f"JSON parsing failed: {e}")
+            except Exception as e:
+                logger.error(f"An unexpected error occurred with Gemini client: {e}")
+        
+        return self._parse_with_openai(clean_text)
