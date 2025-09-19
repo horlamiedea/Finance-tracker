@@ -26,8 +26,29 @@ def process_receipt_upload(receipt_id: int):
         return f"Receipt {receipt_id} already attached to Tx {receipt.transaction_id}; skipping."
     ai = AIService()
     try:
-        parsed = ai.extract_data_from_receipt(receipt.uploaded_image.path)
+        import requests
+        import tempfile
+        
+        # Download the image from the URL
+        response = requests.get(receipt.uploaded_image_url, stream=True)
+        response.raise_for_status()  # Raise an exception for bad status codes
+        
+        # Create a temporary file to store the image
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
+            for chunk in response.iter_content(chunk_size=8192):
+                temp_file.write(chunk)
+            temp_file_path = temp_file.name
+            
+        # Process the image from the temporary file
+        parsed = ai.extract_data_from_receipt(temp_file_path)
+        
+        # Clean up the temporary file
+        os.remove(temp_file_path)
+        
     except Exception as e:
+        # Clean up the temporary file in case of an error
+        if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
         return f"AI parse failed for receipt {receipt_id}: {e}"
     receipt.extracted_text = json.dumps(parsed)
     receipt.items          = parsed.get("items", [])

@@ -98,14 +98,25 @@ class ReceiptProcessView(generics.CreateAPIView):
     parser_classes     = [MultiPartParser]
 
     def create(self, request, *args, **kwargs):
-        # 1) Validate and save the Receipt (without blocking for OCR/AI)
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        receipt = serializer.save(user=request.user)
+        uploaded_image = request.FILES.get('uploaded_image')
+        if not uploaded_image:
+            return Response({"error": "No image provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create a new Receipt instance
+        receipt = Receipt(user=request.user)
+        
+        # Upload the image to Azure and set the URL on the receipt instance
+        receipt.upload_to_azure(uploaded_image)
+        
+        # Now save the receipt instance with the Azure URL to the DB
+        receipt.save()
+        
+        # Trigger the background task
         process_receipt_upload.delay(receipt.id)
+        
+        serializer = self.get_serializer(receipt)
         data = {
-            "receipt": ReceiptSerializer(receipt, context={"request": request}).data,
+            "receipt": serializer.data,
             "message": "Receipt uploaded successfully. Line-items will be extracted in the background."
         }
-        headers = self.get_success_headers(serializer.data)
-        return Response(data, status=status.HTTP_201_CREATED, headers=headers)
+        return Response(data, status=status.HTTP_201_CREATED)
