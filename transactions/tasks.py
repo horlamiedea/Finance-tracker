@@ -84,17 +84,26 @@ def process_raw_email_task(raw_email_id: int):
 
     # Step 1 & 2: Attempt parsing with saved functions or generate a new one
     parsed_data = html_parser.run_all_parsers(raw_email.raw_text)
-    if parsed_data:
+    if parsed_data and all(parsed_data.get(key) for key in ['amount', 'date', 'transaction_type', 'narration']):
         parsing_method_used = 'dynamic_html_parser_success'
+        logger.info(f"Successfully parsed email {raw_email.id} with a saved parser.")
     else:
         bank_name = html_parser.get_bank_name_from_html(raw_email.raw_text)
         if bank_name and bank_name != 'Unknown':
+            logger.info(f"No working parser for {bank_name}. Attempting to generate a new one.")
             new_parser_code = ai_service.generate_parser_function(raw_email.raw_text)
             if new_parser_code:
+                logger.info(f"Generated new parser for {bank_name}. Testing...")
                 parsed_data = html_parser.run_single_parser(new_parser_code, raw_email.raw_text)
-                if parsed_data:
+                if parsed_data and all(parsed_data.get(key) for key in ['amount', 'date', 'transaction_type', 'narration']):
                     ParserFunction.objects.update_or_create(bank_name=bank_name, defaults={'parser_code': new_parser_code})
                     parsing_method_used = 'ai_generated_parser_success'
+                    logger.info(f"New parser for {bank_name} worked and has been saved.")
+                else:
+                    logger.warning(f"Newly generated parser for {bank_name} failed to extract all required fields.")
+                    parsed_data = None # Ensure we fall back to other methods
+            else:
+                logger.error(f"AI failed to generate a parser for {bank_name}.")
 
     # Step 3: Final fallback to direct AI extraction
     if not parsed_data:
@@ -291,7 +300,11 @@ def sync_user_transactions_task(user_id, start_date_iso, end_date_iso):
     logger.info(f"Using Gmail query: {query}")
 
     try:
-        emails = gmail_service.fetch_emails(query=query)
+        emails = gmail_service.fetch_emails(user=user, query=query)
+    except RefreshError:
+        logger.error(f"Token expired or revoked for user {user_id}. Sending re-authentication email.")
+        send_reauthentication_email_task.delay(user_id)
+        return
     except Exception as e:
         logger.error(f"Failed to fetch emails for user {user_id}: {e}")
         return
@@ -501,6 +514,38 @@ def reprocess_failed_emails_task(user_id):
 from .pdf_generate import PDFReportGenerator
 from django.core.mail import EmailMessage
 from django.utils import timezone
+
+
+@shared_task
+def send_reauthentication_email_task(user_id):
+    """
+    Sends an email to the user asking them to re-authenticate their Google account.
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        logger.error(f"send_reauthentication_email_task: User {user_id} not found.")
+        return
+
+    subject = "Action Required: Re-authenticate Your Google Account"
+    body = (
+        "Hello,\n\n"
+        "We were unable to sync your latest transactions because the connection to your Google account has expired. "
+        "Please re-authenticate your account to continue receiving automated transaction updates.\n\n"
+        "Thank you,\n"
+        "The Castellum Team"
+    )
+    
+    email = EmailMessage(
+        subject=subject,
+        body=body,
+        from_email="Financial Tracker <noreply@mycastellum.com>",
+        to=[user.email],
+    )
+    email.send()
+    logger.info(f"Sent re-authentication email to {user.email}.")
+
+
 @shared_task
 def generate_and_email_report_task(user_id, start_date_iso=None, end_date_iso=None):
     """

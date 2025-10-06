@@ -324,6 +324,23 @@ class BudgetViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user)
 
 
+class BankViewSet(viewsets.ModelViewSet):
+    serializer_class = BankSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Bank.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        try:
+            return super().create(request, *args, **kwargs)
+        except IntegrityError:
+            return Response({"error": "This bank already exists for your account."}, status=400)
+
+
 class EmailReportView(APIView):
     """
     Handles the request to email a financial report as a PDF attachment.

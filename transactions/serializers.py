@@ -3,6 +3,12 @@ from .models import *
 from receipts.models import Receipt
 
 
+class BankSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Bank
+        fields = ['id', 'name', 'is_excluded']
+
+
 class TransactionCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = TransactionCategory

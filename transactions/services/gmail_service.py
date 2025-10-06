@@ -14,6 +14,8 @@ import json
 import logging
 from bs4 import BeautifulSoup
 from googleapiclient.errors import HttpError
+from google.auth.exceptions import RefreshError
+from transactions.models import Bank
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +33,37 @@ class GmailService:
         )
         self.service = build('gmail', 'v1', credentials=self.creds)
 
-    def fetch_emails(self, query='subject:("credit" OR "debit" OR "Transaction Notification") -("login" OR "signin" OR "password")'):
+    def fetch_emails(self, user, query='subject:("credit" OR "debit" OR "Transaction Notification") -("login" OR "signin" OR "password")'):
         """
         Fetches all messages within conversation threads matching the query.
         This is more robust and prevents missing 'stacked' emails.
         """
+        excluded_banks = Bank.objects.filter(user=user, is_excluded=True).values_list('name', flat=True)
+        
+        bank_domain_map = {
+            'Providus Bank': 'providusbank.com',
+            'Opay': 'opay-nigeria.com',
+            'Alat': 'alat.ng',
+            'Wema Bank': 'wemabank.com',
+            'UBA Bank': 'uba.com',
+            'Zenith Bank': 'zenithbank.com',
+            'Moniepoint': 'moniepoint.com',
+            'Kuda Bank': 'kuda.com',
+        }
+
+        exclusion_query_parts = []
+        for bank_name in excluded_banks:
+            domain = bank_domain_map.get(bank_name)
+            if domain:
+                exclusion_query_parts.append(f"-from:{domain}")
+        
+        exclusion_query = " ".join(exclusion_query_parts)
+        final_query = f"{query} {exclusion_query}".strip()
+
         all_messages = []
         try:
             # First, get all threads that match the query
-            threads_response = self.service.users().threads().list(userId='me', q=query).execute()
+            threads_response = self.service.users().threads().list(userId='me', q=final_query).execute()
             threads = threads_response.get('threads', [])
 
             for thread_info in threads:
@@ -53,6 +77,9 @@ class GmailService:
             logger.info(f"Found {len(all_messages)} messages across {len(threads)} threads.")
             return all_messages
 
+        except RefreshError:
+            # Re-raise the exception to be caught by the Celery task
+            raise
         except HttpError as error:
             logger.error(f"An HTTP error occurred while fetching email threads: {error}")
             return []
