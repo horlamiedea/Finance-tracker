@@ -15,6 +15,7 @@ urlpatterns = [
     path('get/', TransactionListView.as_view(), name='transaction-list'),
     path('<uuid:pk>/', TransactionUpdateView.as_view(), name='transaction-update'),
     path('budget-suggestion/', BudgetSuggestionView.as_view(), name='budget-suggestion'),
+    path('categories/', TransactionCategoryListView.as_view(), name='category-list'),
     path('categorize/', CategorizeUserTransactionsView.as_view(), name='categorize-transactions'),
     path('summary/', TransactionSummaryView.as_view(), name='transaction-summary'),
     path('spending-statistics/', SpendingStatisticsView.as_view(), name='spending-statistics'),

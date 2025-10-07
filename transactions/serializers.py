@@ -29,18 +29,14 @@ class TransactionSerializer(serializers.ModelSerializer):
 
 
 class TransactionUpdateSerializer(serializers.ModelSerializer):
+    category = serializers.PrimaryKeyRelatedField(
+        queryset=TransactionCategory.objects.all(), 
+        required=False
+    )
+
     class Meta:
         model = Transaction
-        fields = [
-            'transaction_type',
-            'amount',
-            'date',
-            'narration',
-            'account_balance',
-            'sender_receiver',
-            'reference_id',
-        ]
-        read_only_fields = ['user']
+        fields = ['category']
 
 
 

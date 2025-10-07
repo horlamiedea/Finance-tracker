@@ -120,3 +120,40 @@ class ReceiptProcessView(generics.CreateAPIView):
             "message": "Receipt uploaded successfully. Line-items will be extracted in the background."
         }
         return Response(data, status=status.HTTP_201_CREATED)
+
+
+class LinkReceiptToTransactionView(generics.CreateAPIView):
+    serializer_class = ReceiptSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser]
+
+    def create(self, request, *args, **kwargs):
+        transaction_id = kwargs.get('transaction_id')
+        uploaded_image = request.FILES.get('uploaded_image')
+
+        if not uploaded_image:
+            return Response({"error": "No image provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            transaction = Transaction.objects.get(id=transaction_id, user=request.user)
+        except Transaction.DoesNotExist:
+            return Response({"error": "Transaction not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Create a new Receipt instance
+        receipt = Receipt(user=request.user, transaction=transaction)
+        
+        # Upload the image to Azure and set the URL on the receipt instance
+        receipt.upload_to_azure(uploaded_image)
+        
+        # Now save the receipt instance with the Azure URL to the DB
+        receipt.save()
+        
+        # Trigger the background task
+        process_receipt_upload.delay(receipt.id)
+        
+        serializer = self.get_serializer(receipt)
+        data = {
+            "receipt": serializer.data,
+            "message": "Receipt uploaded and linked successfully. Line-items will be extracted in the background."
+        }
+        return Response(data, status=status.HTTP_201_CREATED)

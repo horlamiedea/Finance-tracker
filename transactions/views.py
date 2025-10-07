@@ -173,6 +173,23 @@ class TransactionUpdateView(generics.RetrieveUpdateAPIView):
         # Only allow user to update their own transactions
         return Transaction.objects.filter(user=self.request.user)
 
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+
+        # If the category is being updated, set is_manually_categorized to True
+        if 'category' in serializer.validated_data:
+            instance.is_manually_categorized = True
+
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+
+class TransactionCategoryListView(generics.ListAPIView):
+    serializer_class = TransactionCategorySerializer
+    permission_classes = [IsAuthenticated]
+    queryset = TransactionCategory.objects.all()
 
 
 class CategorizeUserTransactionsView(APIView):
