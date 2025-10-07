@@ -18,7 +18,7 @@ for i in range(1, 4):
     if api_key:
         try:
             configure_google_ai(api_key=api_key)
-            GEMINI_CLIENTS.append(GenerativeModel("gemini-2.5-pro"))
+            GEMINI_CLIENTS.append(GenerativeModel("gemini-2.5-flash-lite"))
         except Exception as e:
             logger.error(f"Failed to initialize Google Gemini client for key {i}: {e}")
 

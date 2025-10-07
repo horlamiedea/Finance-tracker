@@ -20,6 +20,7 @@ from .models import RawEmail
 from django.db.models import Q
 from transactions.models import TransactionCategory
 from receipts.models import Receipt
+from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -544,6 +545,22 @@ def send_reauthentication_email_task(user_id):
     )
     email.send()
     logger.info(f"Sent re-authentication email to {user.email}.")
+
+
+@shared_task
+def sync_all_users_transactions_daily():
+    """
+    A Celery Beat task that runs daily to sync transactions for all users.
+    """
+    User = get_user_model()
+    users = User.objects.filter(gmail_token__isnull=False, gmail_refresh_token__isnull=False)
+    
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=1)
+
+    for user in users:
+        sync_user_transactions_task.delay(user.id, start_date.isoformat(), end_date.isoformat())
+        logger.info(f"Initiated daily transaction sync for user {user.username}.")
 
 
 @shared_task
