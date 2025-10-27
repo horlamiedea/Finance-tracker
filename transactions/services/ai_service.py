@@ -18,7 +18,7 @@ for i in range(1, 4):
     if api_key:
         try:
             configure_google_ai(api_key=api_key)
-            GEMINI_CLIENTS.append(GenerativeModel("gemini-2.5-flash-lite"))
+            GEMINI_CLIENTS.append(GenerativeModel("gemini-pro"))
         except Exception as e:
             logger.error(f"Failed to initialize Google Gemini client for key {i}: {e}")
 
@@ -52,22 +52,22 @@ Do not include any text, markdown, or formatting before or after the JSON object
 - If the subject is "Transaction Notification" or similar, you MUST examine the email body to determine if it is a debit or credit.
 
 The required JSON keys are:
-- "transaction_type": Must be either "debit" or "credit".
-- "amount": The transaction amount as a string (e.g., "300250.00").
-- "currency": The currency code (e.g., "NGN", "USD"). Default to "NGN" if not specified.
-- "date": The date of the transaction in any parseable format (e.g., "YYYY-MM-DD HH:MM:SS" or "Fri, Jun 27, 2025 at 9:10 PM").
-- "narration": The actual transaction narration. This should be cleaned of any transactional codes, reference numbers, or other machine-readable identifiers. For example:
-    - "BILL PAYMENT - FUNDS TRANSFER POS@<2ISAIUFX> <2302BA000009611> <229260035188@2ISAH9HFPAYCLIQ LIMITED  NG> <229260035188> <100562/877787>" should become "BILL PAYMENT - FUNDS TRANSFER POS 2ISAH9HFPAYCLIQ LIMITED NG".
-    - "AIRTIME TO 08160226835 MTN/ATP|2MPT99l1w|1966744399411990528" should become "AIRTIME TO 08160226835".
-    - "BILL PAYMENT FOR LOOKMAN AYINDE KAREEM Ikeja Electricity Distribution Prepaid 0213240200799/BPT|2MPT99l1w|1966744085187317760" should become "BILL PAYMENT FOR LOOKMAN AYINDE KAREEM Ikeja Electricity Distribution Prepaid".
-    - "TRANSFER TO Atreos Retail Platform Limited - Bokku Mart Grammar Sch Ojodu Moniepoint MFB *****96254/TRF|2MPT99l1w|1966587778479702016" should become "TRANSFER TO Atreos Retail Platform Limited - Bokku Mart Grammar Sch Ojodu Moniepoint MFB".
-    - "CASH WITHDRAWAL FROM OTHERS ATM ATM@<10322851> <000000000000000> <CAID00110322851         LAGOS         NG> <002765324844> <465679/421544>" should become "CASH WITHDRAWAL FROM OTHERS ATM".
-    - "ATM WITHDRAWAL COMMISSION ATM@<10322851> <000000000000000> <CAID00110322851         LAGOS         NG> <002765324844> <465679/421544>" should become "ATM WITHDRAWAL COMMISSION".
-- "bank_name": The name of the bank (e.g., "Providus Bank", "Moniepoint"). Note: This may be overridden by email metadata.
-- "account_balance": The available account balance after the transaction, as a string. Use null if not available.
+- \"transaction_type\": Must be either \"debit\" or \"credit\".
+- \"amount\": The transaction amount as a string (e.g., \"300250.00\").
+- \"currency\": The currency code (e.g., \"NGN\", \"USD\"). Default to \"NGN\" if not specified.
+- \"date\": The date of the transaction in any parseable format (e.g., \"YYYY-MM-DD HH:MM:SS\" or \"Fri, Jun 27, 2025 at 9:10 PM\").
+- \"narration\": The actual transaction narration. This should be cleaned of any transactional codes, reference numbers, or other machine-readable identifiers. For example:
+    - \"BILL PAYMENT - FUNDS TRANSFER POS@<2ISAIUFX> <2302BA000009611> <229260035188@2ISAH9HFPAYCLIQ LIMITED  NG> <229260035188> <100562/877787>\" should become \"BILL PAYMENT - FUNDS TRANSFER POS 2ISAH9HFPAYCLIQ LIMITED NG\".
+    - \"AIRTIME TO 08160226835 MTN/ATP|2MPT99l1w|1966744399411990528\" should become \"AIRTIME TO 08160226835\".
+    - \"BILL PAYMENT FOR LOOKMAN AYINDE KAREEM Ikeja Electricity Distribution Prepaid 0213240200799/BPT|2MPT99l1w|1966744085187317760\" should become \"BILL PAYMENT FOR LOOKMAN AYINDE KAREEM Ikeja Electricity Distribution Prepaid\".
+    - \"TRANSFER TO Atreos Retail Platform Limited - Bokku Mart Grammar Sch Ojodu Moniepoint MFB *****96254/TRF|2MPT99l1w|1966587778479702016\" should become \"TRANSFER TO Atreos Retail Platform Limited - Bokku Mart Grammar Sch Ojodu Moniepoint MFB\".
+    - \"CASH WITHDRAWAL FROM OTHERS ATM ATM@<10322851> <000000000000000> <CAID00110322851         LAGOS         NG> <002765324844> <465679/421544>\" should become \"CASH WITHDRAWAL FROM OTHERS ATM\".
+    - \"ATM WITHDRAWAL COMMISSION ATM@<10322851> <000000000000000> <CAID00110322851         LAGOS         NG> <002765324844> <465679/421544>\" should become \"ATM WITHDRAWAL COMMISSION\".
+- \"bank_name\": The name of the bank (e.g., \"Providus Bank\", \"Moniepoint\"). Note: This may be overridden by email metadata.
+- \"account_balance\": The available account balance after the transaction, as a string. Use null if not available.
 
 If you cannot find a specific piece of information, set its value to null.
-If the email is not a transaction alert, return a JSON object with "transaction_type" set to null.
+If the email is not a transaction alert, return a JSON object with \"transaction_type\" set to null.
 """
 
     def _parse_with_gemini(self, text_content: str, attempt: int = 1) -> Optional[Dict[str, Any]]:
@@ -85,6 +85,10 @@ If the email is not a transaction alert, return a JSON object with "transaction_
             cleaned_response = response.text.strip().replace("```json", "").replace("```", "").strip()
             return json.loads(cleaned_response)
         except GoogleAPIError as e:
+            if "API key expired" in str(e) or "API_KEY_INVALID" in str(e):
+                logger.error(f"Google Gemini API error for key {self.gemini_client_index + 1}: {e}")
+                self.gemini_client_index = (self.gemini_client_index + 1) % len(GEMINI_CLIENTS)
+                return {"error": "API_KEY_INVALID"}
             if "429" in str(e):
                 logger.warning(f"Gemini API rate limit hit for key {self.gemini_client_index + 1}. Rotating to next key.")
                 self.gemini_client_index = (self.gemini_client_index + 1) % len(GEMINI_CLIENTS)
@@ -140,6 +144,9 @@ If the email is not a transaction alert, return a JSON object with "transaction_
         for i in range(len(GEMINI_CLIENTS) * 2): # Try each key twice
             parsed_data = self._parse_with_gemini(clean_text, attempt=i + 1)
             if parsed_data:
+                if parsed_data.get("error") == "API_KEY_INVALID":
+                    logger.warning("Gemini API key is invalid, switching to OpenAI.")
+                    return self._parse_with_openai(clean_text)
                 return parsed_data
             time.sleep(5)
 
@@ -157,7 +164,7 @@ You are an expert financial transaction categorizer. Your goal is to assign the 
 {', '.join(categories)}
 
 **Examples of Previously Categorized Transactions:**
-{example_str if example_str else "No examples available."}
+{example_str if example_str else "No examples available."} 
 
 **New Transaction to Categorize:**
 - Narration: "{narration}"
@@ -194,7 +201,7 @@ Respond ONLY with the name of the category from the list. If no category is a go
         Args:
             narration: The narration of the transaction to categorize.
             categories: A list of possible category names.
-            examples: A list of dicts, with {"narration": str, "category__name": str}, for few-shot prompting.
+            examples: A list of dicts, with {{"narration": str, "category__name": str}}, for few-shot prompting.
             
         Returns:
             The name of the best-fit category, or "Unknown".
@@ -275,14 +282,14 @@ Your task is to extract the following details and return them as a SINGLE, VALID
 Do not include any text, markdown, or formatting before or after the JSON object.
 
 The required JSON keys are:
-- "total": The total amount of the transaction as a string (e.g., "300250.00").
-- "date": The date of the transaction in "YYYY-MM-DD" format.
-- "items": A list of items, where each item is a dictionary with "description" and "amount" keys.
+- \"total\": The total amount of the transaction as a string (e.g., \"300250.00\").
+- \"date\": The date of the transaction in \"YYYY-MM-DD\" format.
+- \"items\": A list of items, where each item is a dictionary with \"description\" and \"amount\" keys.
 
 If you cannot find a specific piece of information, set its value to null.
 """
             
-            response = client.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_data}])
+            response = client.generate_content([prompt, {{"mime_type": "image/jpeg", "data": image_data}}])
             cleaned_response = response.text.strip().replace("```json", "").replace("```", "").strip()
             return json.loads(cleaned_response)
         except GoogleAPIError as e:
@@ -358,12 +365,12 @@ Your task is to extract the following details and return them as a SINGLE, VALID
 Do not include any text, markdown, or formatting before or after the JSON object.
 
 The required JSON keys are:
-- "transaction_type": Must be either "debit" or "credit".
-- "amount": The transaction amount as a string (e.g., "300250.00").
-- "date": The date of the transaction in any parseable format (e.g., "YYYY-MM-DD HH:MM:SS" or "Fri, Jun 27, 2025 at 9:10 PM").
-- "narration": The transaction narration.
-- "account_balance": The available account balance after the transaction, as a string. Use null if not available.
-- "bank_name": The name of the bank (e.g., "Providus Bank", "Moniepoint").
+- \"transaction_type\": Must be either \"debit\" or \"credit\".
+- \"amount\": The transaction amount as a string (e.g., \"300250.00\").
+- \"date\": The date of the transaction in any parseable format (e.g., \"YYYY-MM-DD HH:MM:SS\" or \"Fri, Jun 27, 2025 at 9:10 PM\").
+- \"narration\": The transaction narration.
+- \"account_balance\": The available account balance after the transaction, as a string. Use null if not available.
+- \"bank_name\": The name of the bank (e.g., \"Providus Bank\", \"Moniepoint\").
 
 Here is the email content:
 ---
