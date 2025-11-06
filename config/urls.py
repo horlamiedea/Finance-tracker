@@ -26,6 +26,7 @@ urlpatterns = [
     path('api/transactions/', include('transactions.urls')),
     path('api/receipts/', include('receipts.urls')),
     path('api/budgeting/', include('budgeting.urls')),
+    path('api/conference/', include('conference.urls')),
 ]
 
 if settings.DEBUG:

@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'transactions',
     'receipts',
     'budgeting',
+    'conference',
 ]
 
 MIDDLEWARE = [
@@ -194,17 +195,29 @@ CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 GMAIL_REDIRECT_URI = os.getenv('GMAIL_REDIRECT_URI')
+
+# EMAIL_HOST = 'smtp.sendgrid.net'
+# EMAIL_BACKEND = "sgbackend.SendGridBackend"
+# EMAIL_PORT = 587
+# EMAIL_USE_SSL = True
+# SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
+# EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER")
+# DEFAULT_FROM_EMAIL = "Castellum <noreply@mycastellum.com>"
+# EMAIL_HOST_PASSWORD = SENDGRID_API_KEY
+# SERVER_MAIL = DEFAULT_FROM_EMAIL
 # Ensure the environment variables are set
 
-EMAIL_HOST = 'smtp.sendgrid.net'
-EMAIL_BACKEND = "sgbackend.SendGridBackend"
-EMAIL_PORT = 587
-EMAIL_USE_SSL = True
-SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
-EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER")
-DEFAULT_FROM_EMAIL = "Castellum <noreply@mycastellum.com>"
-EMAIL_HOST_PASSWORD = SENDGRID_API_KEY
-SERVER_MAIL = DEFAULT_FROM_EMAIL
+# Email (SMTP) - defaults to Hostinger settings, but can be overridden via environment vars
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.hostinger.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "465"))
+# Prefer SSL on 465; allow toggling TLS via env if needed
+EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "True").lower() in ("1", "true", "yes")
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "False").lower() in ("1", "true", "yes")
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "freedomconference@citizensoflightchurch.org")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "Citizens of Light Church <freedomconference@citizensoflightchurch.org>")
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 SESSION_COOKIE_SAME_SITE = 'Lax'
 
