@@ -29,7 +29,11 @@ SECRET_KEY = "django-insecure-y@2h_x())95mihf1qh*f$_)0rr-b(6zl)lo!(1o!ew@cu3c98z
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [
+    'financetracker.eastus.cloudapp.azure.com',
+    '127.0.0.1',
+    'localhost',
+]
 
 
 # Application definition
@@ -84,7 +88,11 @@ SIMPLE_JWT = {
 
 AUTH_USER_MODEL = 'users.CustomUser'
 
-CSRF_TRUSTED_ORIGINS = ['https://financetracker.eastus.cloudapp.azure.com/', 'http://172.203.248.172:8000/']
+CSRF_TRUSTED_ORIGINS = [
+    'https://financetracker.eastus.cloudapp.azure.com',
+    'https://127.0.0.1',
+    'https://localhost',
+]
 
 
 ROOT_URLCONF = "config.urls"
@@ -193,7 +201,6 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "https://freedom-confrence-landing.vercel.app",
     "https://fc25.citizensoflightchurch.org",
-    "http://financetracker.eastus.cloudapp.azure.com",
 ]
 
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
@@ -230,7 +237,8 @@ SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 SESSION_COOKIE_SAME_SITE = 'Lax'
 
-
+CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = True
 
 # # Ensure cookies are only sent over HTTPS
 # SESSION_COOKIE_SECURE = True
