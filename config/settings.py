@@ -84,7 +84,7 @@ SIMPLE_JWT = {
 
 AUTH_USER_MODEL = 'users.CustomUser'
 
-CSRF_TRUSTED_ORIGINS = ['http://financetracker.eastus.cloudapp.azure.com/', 'http://172.203.248.172:8000/']
+CSRF_TRUSTED_ORIGINS = ['https://financetracker.eastus.cloudapp.azure.com/', 'http://172.203.248.172:8000/']
 
 
 ROOT_URLCONF = "config.urls"
