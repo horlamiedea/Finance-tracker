@@ -192,7 +192,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",  # The origin for your React development server
     "http://127.0.0.1:5173",
     "https://freedom-confrence-landing.vercel.app",
-    "https://fc25.citizensoflightchurch.org"
+    "https://fc25.citizensoflightchurch.org",
+    "http://financetracker.eastus.cloudapp.azure.com",
 ]
 
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
