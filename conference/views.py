@@ -5,6 +5,10 @@ from email.mime.image import MIMEImage
 import requests
 from django.template.loader import render_to_string
 from rest_framework import generics, permissions
+import csv
+from django.http import HttpResponse
+from django.utils import timezone
+from django.contrib.admin.views.decorators import staff_member_required
 
 from .models import FreedomConferenceRegistration
 from .serializers import FreedomConferenceRegistrationSerializer
@@ -74,3 +78,48 @@ class FreedomConferenceRegistrationCreateView(generics.CreateAPIView):
         instance = serializer.save()
         send_welcome_email(instance)
         return instance
+
+
+@staff_member_required
+def export_freedom_conference_registrations_csv(request):
+    """
+    Staff-only CSV export of all Freedom Conference registrations.
+    """
+    qs = FreedomConferenceRegistration.objects.all().order_by("-created_at")
+
+    timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = f'attachment; filename="freedom_registrations_{timestamp}.csv"'
+
+    writer = csv.writer(response)
+    # Header
+    writer.writerow(
+        [
+            "Name",
+            "Email",
+            "Phone Number",
+            "Is Minister",
+            "Ministry Name",
+            "Ministry Address",
+            "Is First Time",
+            "Expectations",
+            "Created At",
+        ]
+    )
+
+    for obj in qs:
+        writer.writerow(
+            [
+                obj.name,
+                obj.email,
+                obj.phone_number,
+                "Yes" if obj.is_minister else "No",
+                obj.ministry_name,
+                obj.ministry_address,
+                "Yes" if obj.is_first_time else "No",
+                (obj.expectations or "").replace("\r\n", " ").replace("\n", " "),
+                obj.created_at.isoformat(),
+            ]
+        )
+
+    return response
